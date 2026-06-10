@@ -30,6 +30,13 @@ const toggleSwitchConfigs = [
     key: 'keepScreenAwake',
   },
   {
+    stateAtom: store.enablePaddleOCR,
+    localizationKey: 'com_nav_enable_paddleocr' as const,
+    switchId: 'enablePaddleOCR',
+    hoverCardText: undefined,
+    key: 'enablePaddleOCR',
+  },
+  {
     stateAtom: store.newChatSwitchToHistory,
     localizationKey: 'com_nav_new_chat_switch_to_history' as const,
     switchId: 'newChatSwitchToHistory',

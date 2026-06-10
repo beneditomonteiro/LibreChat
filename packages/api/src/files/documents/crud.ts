@@ -1,11 +1,16 @@
+import axios from "axios";
+import FormData from "form-data";
 import * as fs from 'fs';
 import yauzl from 'yauzl';
 import { megabyte, excelMimeTypes, FileSources } from 'librechat-data-provider';
+import { generateShortLivedToken } from '~/crypto/jwt';
+import { logAxiosError } from '~/utils/axios';
+import type { ServerRequest } from '~/types';
 import type { TextItem } from 'pdfjs-dist/types/src/display/api';
 import type { MistralOCRUploadResult } from '~/types';
 import { assertSafeZipSize } from './zipSafety';
 
-type FileParseFn = (file: Express.Multer.File) => Promise<string>;
+type FileParseFn = (params: { req: ServerRequest; file: Express.Multer.File }) => Promise<string>;
 
 const DOCUMENT_PARSER_MAX_FILE_SIZE = 15 * megabyte;
 const ODT_MAX_DECOMPRESSED_SIZE = 50 * megabyte;
@@ -17,8 +22,10 @@ const ODT_MAX_DECOMPRESSED_SIZE = 50 * megabyte;
  * @throws {Error} if `file.mimetype` is not handled, file exceeds size limit, or no text is found.
  */
 export async function parseDocument({
+  req,
   file,
 }: {
+  req: ServerRequest;
   file: Express.Multer.File;
 }): Promise<MistralOCRUploadResult> {
   const parseFn = getParserForMimeType(file.mimetype);
@@ -35,7 +42,7 @@ export async function parseDocument({
     );
   }
 
-  const text = await parseFn(file);
+  const text = await parseFn({ req, file });
 
   if (!text?.trim()) {
     throw new Error('No text found in document');
@@ -52,6 +59,12 @@ export async function parseDocument({
 
 /** Maps a MIME type to its document parser function, or `undefined` if unsupported. */
 function getParserForMimeType(mimetype: string): FileParseFn | undefined {
+    if (mimetype === "application/msword" || mimetype === "application/vnd.ms-word") {
+      return docToText;
+    }
+    if (mimetype === "application/vnd.openxmlformats-officedocument.presentationml.presentation" || mimetype === "application/vnd.ms-powerpoint") {
+      return pptToText;
+    }
   if (mimetype === 'application/pdf') {
     return pdfToText;
   }
@@ -71,7 +84,7 @@ function getParserForMimeType(mimetype: string): FileParseFn | undefined {
 }
 
 /** Parses PDF, returns text inside. */
-async function pdfToText(file: Express.Multer.File): Promise<string> {
+async function pdfToText({ file }: { file: Express.Multer.File }): Promise<string> {
   // Imported inline so that Jest can test other routes without failing due to loading ESM
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
@@ -93,7 +106,7 @@ async function pdfToText(file: Express.Multer.File): Promise<string> {
 }
 
 /** Parses Word document, returns text inside. */
-async function wordDocToText(file: Express.Multer.File): Promise<string> {
+async function wordDocToText({ file }: { file: Express.Multer.File }): Promise<string> {
   const buffer = await fs.promises.readFile(file.path);
   /* Reject zip-bomb DOCX before mammoth's internal extractor runs.
    * mammoth has no decompressed-size cap of its own; without this, a
@@ -106,7 +119,7 @@ async function wordDocToText(file: Express.Multer.File): Promise<string> {
 }
 
 /** Parses Excel sheet, returns text inside. */
-async function excelSheetToText(file: Express.Multer.File): Promise<string> {
+async function excelSheetToText({ file }: { file: Express.Multer.File }): Promise<string> {
   // xlsx CDN build (0.20.x) does not bind fs internally when dynamically imported;
   // readFile() fails with "Cannot access file". read() takes a pre-loaded Buffer instead.
   const { read, utils } = await import('xlsx');
@@ -136,7 +149,7 @@ async function excelSheetToText(file: Express.Multer.File): Promise<string> {
  * five standard XML entities are decoded. Complex elements such as frames,
  * text boxes, and annotations are stripped without replacement.
  */
-async function odtToText(file: Express.Multer.File): Promise<string> {
+async function odtToText({ file }: { file: Express.Multer.File }): Promise<string> {
   const xml = await extractOdtContentXml(file.path);
   const bodyMatch = xml.match(/<office:body[^>]*>([\s\S]*?)<\/office:body>/);
   if (!bodyMatch) {
@@ -241,4 +254,67 @@ function extractOdtContentXml(filePath: string): Promise<string> {
       zipfile.on('error', (zipErr: Error) => finish(zipErr));
     });
   });
+}
+
+
+/** Generic RAG API extraction fallback for complex binary formats. */
+async function ragExtract({
+  req,
+  file,
+  label,
+}: {
+  req: ServerRequest;
+  file: Express.Multer.File;
+  label: string;
+}): Promise<string> {
+  const userId = req.user?.id;
+  if (!userId) {
+    logger.warn(`[ragExtract] No user ID provided for ${label} parsing; skipping`);
+    return "";
+  }
+  const ragApiUrl = process.env.RAG_API_URL;
+  if (!ragApiUrl) {
+    logger.warn(`[ragExtract] RAG_API_URL not defined; ${label} parsing unavailable`);
+    return "";
+  }
+
+  try {
+    const jwtToken = generateShortLivedToken(userId);
+    const formData = new FormData();
+    formData.append("file", fs.createReadStream(file.path), { filename: file.originalname });
+    formData.append("strategy", "builtin");
+
+    const formHeaders = formData.getHeaders();
+
+    const response = await axios.post(`${ragApiUrl}/extract`, formData, {
+      headers: {
+        Authorization: `Bearer ${jwtToken}`,
+        accept: "application/json",
+        ...formHeaders,
+      },
+      timeout: 600000,
+    });
+
+    if (!response.data || typeof response.data.text !== "string") {
+      throw new Error(`RAG API did not return valid extracted text for ${label}`);
+    }
+
+    return response.data.text;
+  } catch (error) {
+    logAxiosError({
+      message: `[${label}ToText] RAG API extraction failed:`,
+      error,
+    });
+    throw error;
+  }
+}
+
+/** Parses legacy Word document using RAG API. */
+async function docToText({ req, file }: { req: ServerRequest; file: Express.Multer.File }): Promise<string> {
+  return await ragExtract({ req, file, label: "doc" });
+}
+
+/** Parses PowerPoint document using RAG API. */
+async function pptToText({ req, file }: { req: ServerRequest; file: Express.Multer.File }): Promise<string> {
+  return await ragExtract({ req, file, label: "ppt" });
 }

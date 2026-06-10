@@ -8,10 +8,14 @@ const loadAgent = (params) => loadAgentFn(params, { getAgent: db.getAgent, getMC
 
 const buildOptions = (req, endpoint, parsedBody, endpointType) => {
   const { spec, iconURL, agent_id, chatProjectId, ...model_parameters } = parsedBody;
+  const requestAgentId = req.body?.agent_id;
+  const resolvedAgentId = isAgentsEndpoint(endpoint)
+    ? agent_id ?? requestAgentId
+    : Constants.EPHEMERAL_AGENT_ID;
   const agentPromise = loadAgent({
     req,
     spec,
-    agent_id: isAgentsEndpoint(endpoint) ? agent_id : Constants.EPHEMERAL_AGENT_ID,
+    agent_id: resolvedAgentId,
     endpoint,
     model_parameters,
   }).catch((error) => {
@@ -26,7 +30,7 @@ const buildOptions = (req, endpoint, parsedBody, endpointType) => {
     spec,
     iconURL,
     endpoint,
-    agent_id,
+    agent_id: resolvedAgentId,
     endpointType,
     chatProjectId,
     model_parameters,

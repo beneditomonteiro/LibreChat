@@ -9,7 +9,7 @@ const passport = require('passport');
 const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const mongoSanitize = require('express-mongo-sanitize');
-const { logger, runAsSystem } = require('@librechat/data-schemas');
+const { logger, runAsSystem, dropSupersededTenantIndexes } = require('@librechat/data-schemas');
 const {
   isEnabled,
   apiNotFound,
@@ -90,9 +90,14 @@ const startServer = async () => {
   if (typeof Bun !== 'undefined') {
     axios.defaults.headers.common['Accept-Encoding'] = 'gzip';
   }
-  await connectDb();
+  const conn = await connectDb();
 
   logger.info('Connected to MongoDB');
+  try {
+    await dropSupersededTenantIndexes(conn);
+  } catch (err) {
+    logger.error('[TenantMigration] Failed to drop superseded tenant indexes:', err);
+  }
   indexSync().catch((err) => {
     logger.error('[indexSync] Background sync failed:', err);
   });

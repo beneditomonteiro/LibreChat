@@ -7,6 +7,7 @@ const {
   megabyte,
   FileContext,
   FileSources,
+  OCRStrategy,
   imageExtRegex,
   EModelEndpoint,
   EToolResources,
@@ -797,38 +798,57 @@ const processAgentFileUpload = async ({ req, res, metadata }) => {
       appConfig?.ocr != null &&
       fileConfig.checkType(file.mimetype, fileConfig.ocr?.supportedMimeTypes || []);
 
+    const hasPaddleOCRPreference = metadata?.enablePaddleOCR === 'true' &&
+      fileConfig.checkType(file.mimetype, fileConfig.ocr?.supportedMimeTypes || []);
+
     const shouldUseDocumentParser =
-      !shouldUseConfiguredOCR && documentParserMimeTypes.some((regex) => regex.test(file.mimetype));
+      !shouldUseConfiguredOCR && !hasPaddleOCRPreference && documentParserMimeTypes.some((regex) => regex.test(file.mimetype));
 
-    const shouldUseOCR = shouldUseConfiguredOCR || shouldUseDocumentParser;
-
+    const shouldUseOCR = shouldUseConfiguredOCR || hasPaddleOCRPreference || shouldUseDocumentParser;
     const resolveDocumentText = async () => {
-      if (shouldUseConfiguredOCR) {
+      const strategies = [];
+      const configuredStrategy = appConfig?.ocr?.strategy;
+
+      let hasOCRCapability = null;
+      const getOCRCapability = async () => {
+        if (hasOCRCapability !== null) return hasOCRCapability;
+        hasOCRCapability = await checkCapability(req, AgentCapabilities.ocr);
+        return hasOCRCapability;
+      };
+      if (metadata?.enablePaddleOCR === "true" || configuredStrategy === OCRStrategy.PADDLE_OCR) {
+        if (!(await getOCRCapability())) {
+          logger.warn(`[processAgentFileUpload] PaddleOCR requested but agent lacks OCR capability for "${file.originalname}"`);
+        } else {
+        strategies.push(OCRStrategy.PADDLE_OCR);
+        }
+      }
+
+      if (configuredStrategy && configuredStrategy !== OCRStrategy.PADDLE_OCR && configuredStrategy !== OCRStrategy.DOCUMENT_PARSER) {
+        if (!(await getOCRCapability())) {
+          logger.warn(`[processAgentFileUpload] Configured strategy "${configuredStrategy}" requires OCR capability which agent lacks for "${file.originalname}"`);
+        } else {
+        strategies.push(configuredStrategy);
+        }
+      }
+
+      strategies.push(OCRStrategy.DOCUMENT_PARSER);
+
+      for (const strategy of strategies) {
         try {
-          const ocrStrategy = appConfig?.ocr?.strategy ?? FileSources.document_parser;
-          const { handleFileUpload } = getStrategyFunctions(ocrStrategy);
-          return await handleFileUpload({ req, file, loadAuthValues });
+          const { handleFileUpload } = getStrategyFunctions(strategy);
+          const result = await handleFileUpload({ req, file, loadAuthValues });
+          if (result) {
+            return result;
+          }
         } catch (err) {
           logger.error(
-            `[processAgentFileUpload] Configured OCR failed for "${file.originalname}", falling back to document_parser:`,
+            `[processAgentFileUpload] Strategy "${strategy}" failed for "${file.originalname}":`,
             err,
           );
         }
       }
-      try {
-        const { handleFileUpload } = getStrategyFunctions(FileSources.document_parser);
-        return await handleFileUpload({ req, file, loadAuthValues });
-      } catch (err) {
-        logger.error(
-          `[processAgentFileUpload] Document parser failed for "${file.originalname}":`,
-          err,
-        );
-      }
     };
 
-    if (shouldUseConfiguredOCR && !(await checkCapability(req, AgentCapabilities.ocr))) {
-      throw new Error('OCR capability is not enabled for Agents');
-    }
 
     if (shouldUseOCR) {
       const ocrResult = await resolveDocumentText();

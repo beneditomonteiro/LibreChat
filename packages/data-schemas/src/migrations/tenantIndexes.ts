@@ -33,7 +33,15 @@ const SUPERSEDED_INDEXES: Record<string, string[]> = {
   accessroles: ['accessRoleId_1'],
   conversationtags: ['tag_1_user_1'],
   mcpservers: ['serverName_1'],
-  files: ['filename_1_conversationId_1_context_1'],
+  // Legacy file-upload dedupe indexes block repeat uploads of the same
+  // PDF/text payload and are no longer compatible with the current file
+  // handling flow, which keys attachments by file_id and file_id-aware
+  // metadata instead.
+  files: [
+    'filename_1_conversationId_1_context_1',
+    'unique_user_file_per_convo',
+    'unique_user_filename_bytes',
+  ],
   groups: ['idOnTheSource_1_source_1'],
 };
 

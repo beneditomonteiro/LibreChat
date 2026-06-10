@@ -13,6 +13,7 @@ import {
   EToolResources,
   EModelEndpoint,
   isBedrockDocumentType,
+  defaultOCRMimeTypes,
   defaultAgentCapabilities,
   isDocumentSupportedProvider,
 } from 'librechat-data-provider';
@@ -95,7 +96,7 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
         if (isBedrock) {
           return type?.startsWith('image/') || isBedrockDocumentType(type);
         }
-        return type?.startsWith('image/') || type === 'application/pdf';
+        return type?.startsWith('image/') || defaultOCRMimeTypes.some((regex) => regex.test(type || ''));
       };
 
       const validFileTypes = files.every(isValidProviderFile);
@@ -113,6 +114,14 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
         value: undefined,
         icon: <ImageUpIcon className="icon-md" />,
         condition: files.every((file) => getFileType(file)?.startsWith('image/')),
+      });
+    }
+    if (capabilities.ocrEnabled) {
+      _options.push({
+        label: localize("com_ui_upload_ocr_text"),
+        value: undefined,
+        icon: <FileType2Icon className="icon-md" />,
+        condition: files.every((file) => getFileType(file)?.startsWith("image/") || defaultOCRMimeTypes.some((regex) => regex.test(getFileType(file) || ""))),
       });
     }
     if (capabilities.fileSearchEnabled && fileSearchAllowedByAgent) {

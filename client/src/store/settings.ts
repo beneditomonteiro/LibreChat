@@ -26,6 +26,7 @@ const localStorageAtoms = {
     true,
   ),
   keepScreenAwake: atomWithLocalStorage('keepScreenAwake', true),
+  enablePaddleOCR: atomWithLocalStorage('enablePaddleOCR', false),
   newChatSwitchToHistory: atomWithLocalStorage('newChatSwitchToHistory', true),
 
   // Chat settings

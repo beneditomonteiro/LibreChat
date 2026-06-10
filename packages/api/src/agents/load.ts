@@ -171,17 +171,31 @@ export async function loadAgent(
   if (!agent_id) {
     return null;
   }
-  if (isEphemeralAgentId(agent_id)) {
-    return loadEphemeralAgent({ req, spec, endpoint, model_parameters }, deps);
-  }
-  const agent = await deps.getAgent({ id: agent_id });
 
+  const agent = await deps.getAgent({ id: agent_id });
   if (!agent) {
+    if (isEphemeralAgentId(agent_id)) {
+      return loadEphemeralAgent({ req, spec, endpoint, model_parameters }, deps);
+    }
     return null;
   }
 
   // Set version count from versions array length
   const agentWithVersion = agent as Agent & { versions?: unknown[]; version?: number };
   agentWithVersion.version = agentWithVersion.versions ? agentWithVersion.versions.length : 0;
+
+  const model = (agent as Agent & { model?: string }).model;
+  if (typeof model === 'string' && model.length > 0) {
+    const modelParameters = (agent.model_parameters ?? {}) as AgentModelParameters & {
+      model?: string;
+    };
+    agent.model_parameters = {
+      ...modelParameters,
+      model: typeof modelParameters.model === 'string' && modelParameters.model.length > 0
+        ? modelParameters.model
+        : model,
+    } as AgentModelParameters;
+  }
+
   return agent;
 }

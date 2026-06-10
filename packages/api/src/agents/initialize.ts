@@ -79,6 +79,133 @@ function appendAdditionalInstructions(agent: Agent, text?: string | null): void 
     .join('\n\n');
 }
 
+function extractConfiguredModelNames(endpointConfig: unknown): string[] {
+  if (!endpointConfig || typeof endpointConfig !== 'object') {
+    return [];
+  }
+
+  const models = new Set<string>();
+  const addModel = (value: unknown): void => {
+    if (typeof value === 'string' && value.length > 0) {
+      models.add(value);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      const name = (value as { name?: unknown }).name;
+      if (typeof name === 'string' && name.length > 0) {
+        models.add(name);
+      }
+    }
+  };
+
+  const config = endpointConfig as {
+    modelNames?: unknown;
+    assistantModels?: unknown;
+    models?: unknown;
+  };
+
+  if (Array.isArray(config.modelNames)) {
+    config.modelNames.forEach(addModel);
+  }
+
+  if (Array.isArray(config.assistantModels)) {
+    config.assistantModels.forEach(addModel);
+  }
+
+  if (Array.isArray(config.models)) {
+    config.models.forEach(addModel);
+  } else if (config.models && typeof config.models === 'object') {
+    const defaultModels = (config.models as { default?: unknown }).default;
+    if (Array.isArray(defaultModels)) {
+      defaultModels.forEach(addModel);
+    }
+  }
+
+  return [...models];
+}
+
+function resolveAgentProvider({
+  agent,
+  appConfig,
+  allowedProviders,
+}: {
+  agent: Pick<Agent, 'provider' | 'model' | 'model_parameters'>;
+  appConfig?: { endpoints?: Record<string, unknown> };
+  allowedProviders: Set<string>;
+}): string {
+  const rawProvider = agent.provider;
+  if (rawProvider !== EModelEndpoint.agents) {
+    return rawProvider;
+  }
+
+  const model =
+    typeof agent.model_parameters?.model === 'string' && agent.model_parameters.model.length > 0
+      ? agent.model_parameters.model
+      : typeof agent.model === 'string' && agent.model.length > 0
+        ? agent.model
+        : undefined;
+
+  const endpoints = appConfig?.endpoints;
+  if (!endpoints || !model) {
+    if (allowedProviders.size === 1) {
+      return [...allowedProviders][0];
+    }
+    return rawProvider;
+  }
+
+  const candidates = new Set<string>();
+  const maybeAddCandidate = (provider: string, endpointConfig: unknown): void => {
+    if (!provider || provider === EModelEndpoint.agents) {
+      return;
+    }
+    if (allowedProviders.size > 0 && !allowedProviders.has(provider)) {
+      return;
+    }
+    if (extractConfiguredModelNames(endpointConfig).includes(model)) {
+      candidates.add(provider);
+    }
+  };
+
+  for (const [endpointName, endpointConfig] of Object.entries(endpoints)) {
+    if (!endpointConfig || endpointName === EModelEndpoint.agents || endpointName === 'all') {
+      continue;
+    }
+
+    if (endpointName === EModelEndpoint.custom && Array.isArray(endpointConfig)) {
+      for (const customEndpoint of endpointConfig) {
+        const providerName =
+          customEndpoint &&
+          typeof customEndpoint === 'object' &&
+          typeof (customEndpoint as { name?: unknown }).name === 'string'
+            ? ((customEndpoint as { name: string }).name as string)
+            : undefined;
+        if (providerName) {
+          maybeAddCandidate(providerName, customEndpoint);
+        }
+      }
+      continue;
+    }
+
+    maybeAddCandidate(endpointName, endpointConfig);
+  }
+
+  if (candidates.size === 1) {
+    return [...candidates][0];
+  }
+
+  if (candidates.size > 1) {
+    throw new Error(
+      `Provider ${rawProvider} is ambiguous for model ${model}: ${[...candidates].join(', ')}`,
+    );
+  }
+
+  if (allowedProviders.size === 1) {
+    return [...allowedProviders][0];
+  }
+
+  return rawProvider;
+}
+
 function getMaxCatalogSkills(req: ServerRequest): number | undefined {
   const endpoints = req.config?.endpoints as
     | Record<string, { skills?: { maxCatalogSkills?: number } } | undefined>
@@ -549,16 +676,6 @@ export async function initializeAgent(
     throw new Error('initializeAgent requires db methods to be passed');
   }
 
-  if (
-    isAgentsEndpoint(endpointOption?.endpoint) &&
-    allowedProviders.size > 0 &&
-    !allowedProviders.has(agent.provider)
-  ) {
-    throw new Error(
-      `{ "type": "${ErrorTypes.INVALID_AGENT_PROVIDER}", "info": "${agent.provider}" }`,
-    );
-  }
-
   let currentFiles: IMongoFile[] | undefined;
 
   const _modelOptions = structuredClone(
@@ -573,7 +690,22 @@ export async function initializeAgent(
     _modelOptions as Record<string, unknown>,
   );
 
-  const provider = agent.provider;
+  const provider = resolveAgentProvider({
+    agent,
+    appConfig: req.config,
+    allowedProviders,
+  });
+  if (
+    isAgentsEndpoint(endpointOption?.endpoint) &&
+    allowedProviders.size > 0 &&
+    !allowedProviders.has(provider)
+  ) {
+    throw new Error(
+      `{ "type": "${ErrorTypes.INVALID_AGENT_PROVIDER}", "info": "${provider}" }`,
+    );
+  }
+
+  agent.provider = provider;
   agent.endpoint = provider;
 
   /**

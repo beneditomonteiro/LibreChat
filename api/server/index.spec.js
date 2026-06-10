@@ -98,6 +98,18 @@ describe('Startup readiness wiring', () => {
     expect(streamConfigIndex).toBeLessThan(postListenMcpIndex);
   });
 
+  it('drops superseded tenant indexes during startup before background indexing begins', () => {
+    const connectIndex = source.indexOf('const conn = await connectDb();');
+    const migrationIndex = source.indexOf('await dropSupersededTenantIndexes(conn);');
+    const indexSyncIndex = source.indexOf('indexSync().catch(');
+
+    expect(connectIndex).toBeGreaterThan(-1);
+    expect(migrationIndex).toBeGreaterThan(-1);
+    expect(indexSyncIndex).toBeGreaterThan(-1);
+    expect(connectIndex).toBeLessThan(migrationIndex);
+    expect(migrationIndex).toBeLessThan(indexSyncIndex);
+  });
+
   it('mounts the chat-start readiness gate before agent routes', () => {
     const readinessGateIndex = source.indexOf(
       "app.use('/api/agents/chat', rejectChatStartsUntilReady);",

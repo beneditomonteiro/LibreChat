@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MAX_SUBAGENTS, ViolationTypes, ErrorTypes } from 'librechat-data-provider';
+import { MAX_SUBAGENTS, ViolationTypes, ErrorTypes, EModelEndpoint } from 'librechat-data-provider';
 import type { Agent, TModelsConfig } from 'librechat-data-provider';
 import type { Request, Response } from 'express';
 
@@ -1397,7 +1397,13 @@ export async function validateAgentModel(
   params: ValidateAgentModelParams,
 ): Promise<ValidateAgentModelResult> {
   const { req, res, agent, modelsConfig, logViolation } = params;
-  const { model, provider: endpoint } = agent;
+  const { provider: endpoint } = agent;
+  const model =
+    typeof agent.model === 'string' && agent.model.length > 0
+      ? agent.model
+      : typeof agent.model_parameters?.model === 'string' && agent.model_parameters.model.length > 0
+        ? agent.model_parameters.model
+        : undefined;
 
   if (!model) {
     return {
@@ -1419,6 +1425,9 @@ export async function validateAgentModel(
 
   const availableModels = modelsConfig[endpoint];
   if (!availableModels) {
+    if (endpoint === EModelEndpoint.agents) {
+      return { isValid: true };
+    }
     return {
       isValid: false,
       error: {

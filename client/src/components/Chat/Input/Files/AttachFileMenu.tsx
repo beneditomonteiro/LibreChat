@@ -4,6 +4,7 @@ import * as Ariakit from '@ariakit/react';
 import {
   FileSearch,
   ImageUpIcon,
+  FileType2Icon,
   FileImageIcon,
   TerminalSquareIcon,
 } from 'lucide-react';
@@ -20,7 +21,7 @@ import {
   EModelEndpoint,
   isPermissiveMimeConfig,
   defaultAgentCapabilities,
-  bedrockDocumentExtensions,
+  ocrExtensions,
   isDocumentSupportedProvider,
 } from 'librechat-data-provider';
 import type { EndpointFileConfig, TConversation } from 'librechat-data-provider';
@@ -126,11 +127,11 @@ const AttachFileMenu = ({
       } else if (fileType === 'document') {
         inputRef.current.accept = '.pdf,application/pdf';
       } else if (fileType === 'image_document') {
-        inputRef.current.accept = 'image/*,.heif,.heic,.pdf,application/pdf';
+        inputRef.current.accept = 'image/*,.heif,.heic,' + ocrExtensions;
       } else if (fileType === 'image_document_extended') {
-        inputRef.current.accept = `image/*,.heif,.heic,${bedrockDocumentExtensions}`;
+        inputRef.current.accept = `image/*,.heif,.heic,${ocrExtensions}`;
       } else if (fileType === 'image_document_video_audio') {
-        inputRef.current.accept = 'image/*,.heif,.heic,.pdf,application/pdf,video/*,audio/*';
+        inputRef.current.accept = 'image/*,.heif,.heic,video/*,audio/*,' + ocrExtensions;
       } else {
         inputRef.current.accept = '';
       }
@@ -193,6 +194,16 @@ const AttachFileMenu = ({
         });
       }
 
+      if (capabilities.ocrEnabled) {
+        items.push({
+          label: localize("com_ui_upload_ocr_text"),
+          onClick: () => {
+            setToolResource(undefined);
+            onAction("image_document");
+          },
+          icon: <FileType2Icon className="icon-md" />,
+        });
+      }
       if (capabilities.fileSearchEnabled && fileSearchAllowedByAgent) {
         items.push({
           label: localize('com_ui_upload_file_search'),

@@ -71,8 +71,8 @@ async function connectDb() {
     logger.info('Mongo Connection options');
     logger.info(JSON.stringify(opts, null, 2));
     mongoose.set('strictQuery', true);
-    cached.promise = mongoose.connect(MONGO_URI, opts).then((mongoose) => {
-      return mongoose;
+    cached.promise = mongoose.connect(MONGO_URI, opts).then(() => {
+      return mongoose.connection;
     });
   }
   cached.conn = await cached.promise;

@@ -105,6 +105,18 @@ describe('dropSupersededTenantIndexes', () => {
           { filename: 1, conversationId: 1, context: 1 },
           { unique: true, name: 'filename_1_conversationId_1_context_1' },
         );
+      await db
+        .collection('files')
+        .createIndex(
+          { user: 1, filename: 1, bytes: 1, conversationId: 1 },
+          { unique: true, sparse: true, name: 'unique_user_file_per_convo' },
+        );
+      await db
+        .collection('files')
+        .createIndex(
+          { user: 1, filename: 1, bytes: 1 },
+          { unique: true, name: 'unique_user_filename_bytes' },
+        );
 
       await db.createCollection('groups');
       await db
@@ -145,6 +157,15 @@ describe('dropSupersededTenantIndexes', () => {
       expect(indexNames).not.toContain('openidId_1');
       expect(indexNames).not.toContain('openidId_1_tenantId_1');
       expect(indexNames).toContain('_id_');
+    });
+
+    it('legacy upload dedupe indexes are actually gone from files collection', async () => {
+      const indexes = await mongoose.connection.db!.collection('files').indexes();
+      const indexNames = indexes.map((idx) => idx.name);
+
+      expect(indexNames).not.toContain('unique_user_file_per_convo');
+      expect(indexNames).not.toContain('unique_user_filename_bytes');
+      expect(indexNames).not.toContain('filename_1_conversationId_1_context_1');
     });
 
     it('old unique indexes are actually gone from roles collection', async () => {
@@ -301,6 +322,13 @@ describe('dropSupersededTenantIndexes', () => {
       expect(SUPERSEDED_INDEXES.users).toContain('googleId_1');
       expect(SUPERSEDED_INDEXES.users).toContain('openidId_1');
       expect(SUPERSEDED_INDEXES.users).toContain('openidId_1_tenantId_1');
+    });
+
+    it('files collection lists legacy upload dedupe indexes', () => {
+      expect(SUPERSEDED_INDEXES.files).toHaveLength(3);
+      expect(SUPERSEDED_INDEXES.files).toContain('filename_1_conversationId_1_context_1');
+      expect(SUPERSEDED_INDEXES.files).toContain('unique_user_file_per_convo');
+      expect(SUPERSEDED_INDEXES.files).toContain('unique_user_filename_bytes');
     });
   });
 });

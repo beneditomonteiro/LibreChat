@@ -194,20 +194,26 @@ export const audioMimeTypes =
 
 export const videoMimeTypes = /^video\/(mp4|avi|mov|wmv|flv|webm|mkv|m4v|3gp|ogv)$/;
 
+export const ocrExtensions = "image/*,.heif,.heic,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.epub,.odt,.ods,.odp,.odg,.md,.txt,.csv";
 export const defaultOCRMimeTypes = [
+  textMimeTypes,
+  textMimeTypes,
   imageMimeTypes,
   excelMimeTypes,
   /^application\/pdf$/,
   /^application\/vnd\.openxmlformats-officedocument\.(wordprocessingml\.document|presentationml\.presentation)$/,
-  /^application\/vnd\.ms-(word|powerpoint)$/,
+  /^application\/(msword|vnd\.ms-(word|powerpoint))$/,
   /^application\/epub\+zip$/,
   /^application\/vnd\.oasis\.opendocument\.(text|spreadsheet|presentation|graphics)$/,
 ];
 
 /** MIME types handled by the built-in document parser (pdf, docx, excel variants, ods/odt) */
 export const documentParserMimeTypes = [
+  /^application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation$/,
   excelMimeTypes,
   /^application\/pdf$/,
+  /^application\/msword$/,
+  /^application\/vnd\.ms-(word|powerpoint)$/,
   /^application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document$/,
   /^application\/vnd\.oasis\.opendocument\.spreadsheet$/,
   /^application\/vnd\.oasis\.opendocument\.text$/,

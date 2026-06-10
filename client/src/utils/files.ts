@@ -11,6 +11,7 @@ import {
   QueryKeys,
   inferMimeType,
   excelMimeTypes,
+  documentParserMimeTypes,
   EToolResources,
   fileConfig as defaultFileConfig,
 } from 'librechat-data-provider';
@@ -227,12 +228,14 @@ export const validateFiles = ({
   endpointFileConfig,
   toolResource,
   fileConfig,
+  enablePaddleOCR,
 }: {
   fileList: File[];
   files: Map<string, ExtendedFile>;
   setError: (error: string) => void;
   endpointFileConfig: EndpointFileConfig;
   toolResource?: string;
+  enablePaddleOCR?: boolean;
   fileConfig: FileConfig | null;
 }) => {
   const { fileLimit, fileSizeLimit, totalSizeLimit, supportedMimeTypes, disabled } =
@@ -273,11 +276,12 @@ export const validateFiles = ({
     }
 
     let mimeTypesToCheck = supportedMimeTypes;
-    if (toolResource === EToolResources.context) {
+    if (toolResource === EToolResources.context || (enablePaddleOCR && !toolResource)) {
       mimeTypesToCheck = [
         ...(fileConfig?.text?.supportedMimeTypes || []),
         ...(fileConfig?.ocr?.supportedMimeTypes || []),
         ...(fileConfig?.stt?.supportedMimeTypes || []),
+        ...documentParserMimeTypes,
       ];
     }
 

@@ -57,6 +57,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     ephemeralAgentByConvoId(conversation?.conversationId ?? Constants.NEW_CONVO),
   );
   const isTemporary = useRecoilValue(store.isTemporary);
+  const enablePaddleOCR = useRecoilValue(store.enablePaddleOCR);
   const setError = (error: string) => setErrors((prevErrors) => [...prevErrors, error]);
   const { addFile, replaceFile, updateFileById, deleteFileById } = useUpdateFiles(
     params?.fileSetter ?? setFiles,
@@ -196,6 +197,9 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
     formData.append('endpointType', endpointType ?? '');
     formData.append('file', extendedFile.file as File, encodeURIComponent(filename));
     formData.append('file_id', extendedFile.file_id);
+    if (enablePaddleOCR) {
+      formData.append('enablePaddleOCR', 'true');
+    }
     if (
       isConversationUpload &&
       conversation?.conversationId &&
@@ -309,6 +313,7 @@ const useFileHandlingCore = (params: UseFileHandling | undefined, fileState: Fil
         fileList,
         setError,
         fileConfig,
+        enablePaddleOCR,
         endpointFileConfig,
         toolResource: effectiveToolResource,
       });
