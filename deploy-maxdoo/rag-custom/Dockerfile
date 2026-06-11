@@ -5,9 +5,9 @@ FROM ghcr.io/danny-avila/librechat-rag-api-dev-lite@sha256:6dfb6832661ff9c26fa32
 # Office/PDF extraction stack (carried over from the previous overlay)
 RUN pip install --no-cache-dir pymupdf4llm==1.27.2.3 docling python-docx openpyxl python-pptx
 
-# PaddleOCR (CPU). Resolved versions are recorded in the build log; the
-# deployed artifact is pinned by image digest, not by pip pins.
-RUN pip install --no-cache-dir "paddlepaddle>=3.0,<4" "paddleocr>=3.0,<4"
+# PaddleOCR (CPU) — pinned to the combination verified on 2026-06-11
+# (requires enable_mkldnn=False, see paddleocr_engine.py).
+RUN pip install --no-cache-dir paddlepaddle==3.3.1 paddleocr==3.7.0
 
 COPY document_loader.py /app/app/utils/document_loader.py
 COPY office_worker.py /app/app/utils/office_worker.py

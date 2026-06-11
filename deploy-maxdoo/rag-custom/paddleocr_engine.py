@@ -43,6 +43,11 @@ def get_engine():
     with _engine_lock:
         if _engine is not None:
             return _engine
+        # oneDNN's PIR executor crashes on the OCR det model with
+        # "ConvertPirAttribute2RuntimeAttribute not support" on paddlepaddle
+        # 3.3.x CPU — disable mkldnn before the engine is built (verified
+        # fix on paddleocr 3.7.0 / paddlepaddle 3.3.1, 2026-06-11).
+        os.environ.setdefault("FLAGS_use_mkldnn", "0")
         from paddleocr import PaddleOCR
 
         lang = os.getenv("PADDLEOCR_LANG", "pt")
@@ -52,6 +57,7 @@ def get_engine():
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=True,
+                enable_mkldnn=False,
             )
         except (TypeError, ValueError):
             # Older constructor signature (2.x)
