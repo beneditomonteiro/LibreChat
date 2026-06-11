@@ -1,12 +1,7 @@
 ---
 name: artifact-generator
 description: Create professional documents (Word, PDF, Excel, PPTX, etc.) by executing Python scripts in a secure sandbox.
-triggers:
-  - generate document
-  - create report
-  - make excel
-  - PowerPoint presentation
-  - export data to file
+when-to-use: When the user asks to generate a document, create a report, make an Excel file, build a PowerPoint presentation, or export data to a file.
 ---
 
 # Document & Artifact Generator
