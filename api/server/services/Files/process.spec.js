@@ -337,6 +337,91 @@ describe('processAgentFileUpload', () => {
       expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.mistral_ocr);
     });
 
+    test('uses paddleocr first when the user preference is enabled for an OCR-supported type', async () => {
+      mergeFileConfig.mockReturnValue(makeFileConfig({ ocrSupportedMimeTypes: [PDF_MIME] }));
+      const req = makeReq({ mimetype: PDF_MIME, ocrConfig: null });
+
+      await processAgentFileUpload({
+        req,
+        res: mockRes,
+        metadata: { ...makeMetadata(), enablePaddleOCR: 'true' },
+      });
+
+      expect(checkCapability).toHaveBeenCalledWith(expect.anything(), AgentCapabilities.ocr);
+      expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.paddleocr);
+    });
+
+    test('preference-driven paddleocr outranks the configured OCR strategy', async () => {
+      mergeFileConfig.mockReturnValue(makeFileConfig({ ocrSupportedMimeTypes: [PDF_MIME] }));
+      const req = makeReq({
+        mimetype: PDF_MIME,
+        ocrConfig: { strategy: FileSources.mistral_ocr },
+      });
+
+      await processAgentFileUpload({
+        req,
+        res: mockRes,
+        metadata: { ...makeMetadata(), enablePaddleOCR: 'true' },
+      });
+
+      const firstStrategy = getStrategyFunctions.mock.calls[0][0];
+      expect(firstStrategy).toBe(FileSources.paddleocr);
+      expect(getStrategyFunctions).not.toHaveBeenCalledWith(FileSources.mistral_ocr);
+    });
+
+    test('falls back to document_parser when the paddleocr strategy fails', async () => {
+      mergeFileConfig.mockReturnValue(makeFileConfig({ ocrSupportedMimeTypes: [PDF_MIME] }));
+      const paddleUpload = jest.fn().mockRejectedValue(new Error('RAG API unreachable'));
+      const parserUpload = jest
+        .fn()
+        .mockResolvedValue({ text: 'parsed text', bytes: 10, filepath: 'doc://parsed' });
+      getStrategyFunctions.mockImplementation((source) =>
+        source === FileSources.paddleocr
+          ? { handleFileUpload: paddleUpload }
+          : { handleFileUpload: parserUpload },
+      );
+      const req = makeReq({ mimetype: PDF_MIME, ocrConfig: null });
+
+      await processAgentFileUpload({
+        req,
+        res: mockRes,
+        metadata: { ...makeMetadata(), enablePaddleOCR: 'true' },
+      });
+
+      expect(paddleUpload).toHaveBeenCalled();
+      expect(parserUpload).toHaveBeenCalled();
+      expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.document_parser);
+    });
+
+    test('ignores the paddleocr preference when the file type is not OCR-supported', async () => {
+      mergeFileConfig.mockReturnValue(makeFileConfig({ ocrSupportedMimeTypes: [PDF_MIME] }));
+      const req = makeReq({ mimetype: DOCX_MIME, ocrConfig: null });
+
+      await processAgentFileUpload({
+        req,
+        res: mockRes,
+        metadata: { ...makeMetadata(), enablePaddleOCR: 'true' },
+      });
+
+      expect(checkCapability).not.toHaveBeenCalledWith(expect.anything(), AgentCapabilities.ocr);
+      expect(getStrategyFunctions).not.toHaveBeenCalledWith(FileSources.paddleocr);
+      expect(getStrategyFunctions).toHaveBeenCalledWith(FileSources.document_parser);
+    });
+
+    test('throws when paddleocr is requested but the OCR capability is disabled', async () => {
+      mergeFileConfig.mockReturnValue(makeFileConfig({ ocrSupportedMimeTypes: [PDF_MIME] }));
+      checkCapability.mockResolvedValue(false);
+      const req = makeReq({ mimetype: PDF_MIME, ocrConfig: null });
+
+      await expect(
+        processAgentFileUpload({
+          req,
+          res: mockRes,
+          metadata: { ...makeMetadata(), enablePaddleOCR: 'true' },
+        }),
+      ).rejects.toThrow('OCR capability is not enabled for Agents');
+    });
+
     test('throws instead of falling back to parseText when document_parser fails for a document MIME type', async () => {
       getStrategyFunctions.mockReturnValue({
         handleFileUpload: jest.fn().mockRejectedValue(new Error('No text found in document')),

@@ -194,9 +194,9 @@ export const audioMimeTypes =
 
 export const videoMimeTypes = /^video\/(mp4|avi|mov|wmv|flv|webm|mkv|m4v|3gp|ogv)$/;
 
-export const ocrExtensions = "image/*,.heif,.heic,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.epub,.odt,.ods,.odp,.odg,.md,.txt,.csv";
+export const ocrExtensions =
+  'image/*,.heif,.heic,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.epub,.odt,.ods,.odp,.odg,.md,.txt,.csv';
 export const defaultOCRMimeTypes = [
-  textMimeTypes,
   textMimeTypes,
   imageMimeTypes,
   excelMimeTypes,

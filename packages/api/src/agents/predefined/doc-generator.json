@@ -8,6 +8,7 @@
   "tool_kwargs": {},
   "category": "general",
   "provider": "agents",
+  "isPublic": true,
   "tool_resources": { "execute_code": { "file_ids": [] } },
   "model_parameters": { "useResponsesApi": true }
 }

@@ -1,0 +1,119 @@
+# MaxDoo LibreChat stack — chat.maxdoo.tech (178.105.34.35)
+# Source of truth: deploy-maxdoo/docker-compose.yml in the LibreChat fork.
+# Deployed to /home/odoo/librechat-maxai/docker-compose.yml by deploy.sh.
+#
+# Image tags are pinned via MAXDOO_TAG (written to .env by deploy.sh as
+# maxdoo-<git short sha>) — never use :latest here.
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: librechat_mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - librechat_net
+
+  db:
+    image: ankane/pgvector:latest
+    container_name: db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mydatabase
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    networks:
+      - librechat_net
+
+  rag_api:
+    image: librechat-rag-paddleocr:${MAXDOO_TAG:?run deploy.sh to set MAXDOO_TAG}
+    container_name: librechat_rag
+    restart: unless-stopped
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=myuser
+      - DB_PASS=mypassword
+      - DB_NAME=mydatabase
+      - EMBEDDINGS_PROVIDER=ollama
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - EMBEDDINGS_MODEL=nomic-embed-text
+      - RAG_PORT=8000
+      - JWT_SECRET=${JWT_SECRET}
+      - PADDLEOCR_LANG=pt
+    depends_on:
+      - db
+    networks:
+      - librechat_net
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  codeapi:
+    image: librechat-codeapi:${MAXDOO_TAG:?run deploy.sh to set MAXDOO_TAG}
+    container_name: librechat_codeapi
+    restart: unless-stopped
+    # Internal-only on purpose: no ports. LibreChat reaches it via
+    # LIBRECHAT_CODE_BASEURL=http://codeapi:8700/v1 on librechat_net.
+    environment:
+      - CODE_API_RUN_TIMEOUT_MS=120000
+    volumes:
+      - codeapi_sessions:/data/sessions
+    mem_limit: 6g
+    cpus: 4
+    networks:
+      - librechat_net
+
+  librechat:
+    image: librechat-maxdoo:${MAXDOO_TAG:?run deploy.sh to set MAXDOO_TAG}
+    container_name: librechat_app
+    restart: unless-stopped
+    ports:
+      - 3080:3080
+    env_file: .env
+    environment:
+      - LIBRECHAT_CODE_BASEURL=http://codeapi:8700/v1
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+      - librechat_uploads:/app/client/public/images
+      - librechat_logs:/app/api/logs
+      - librechat_user_uploads:/app/uploads
+    depends_on:
+      - mongodb
+      - rag_api
+      - codeapi
+    networks:
+      - librechat_net
+      - odoo_network
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  benchmark:
+    image: nginx:alpine
+    container_name: librechat_bench
+    restart: unless-stopped
+    ports:
+      - 3081:80
+    volumes:
+      - ./benchmark:/usr/share/nginx/html:ro
+      - ./benchmark/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - librechat_net
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+volumes:
+  mongo_data:
+  librechat_uploads:
+  librechat_user_uploads:
+  librechat_logs:
+  pgvector_data:
+  codeapi_sessions:
+
+networks:
+  librechat_net:
+    driver: bridge
+  odoo_network:
+    external: true
