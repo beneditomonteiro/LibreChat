@@ -5,6 +5,7 @@ import {
   ImageUpIcon,
   FileSearch,
   FileImageIcon,
+  FileType2Icon,
   TerminalSquareIcon,
 } from 'lucide-react';
 import {
@@ -96,7 +97,9 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
         if (isBedrock) {
           return type?.startsWith('image/') || isBedrockDocumentType(type);
         }
-        return type?.startsWith('image/') || defaultOCRMimeTypes.some((regex) => regex.test(type || ''));
+        return (
+          type?.startsWith('image/') || defaultOCRMimeTypes.some((regex) => regex.test(type || ''))
+        );
       };
 
       const validFileTypes = files.every(isValidProviderFile);
@@ -118,10 +121,14 @@ const DragDropModal = ({ onOptionSelect, setShowModal, files, isVisible }: DragD
     }
     if (capabilities.ocrEnabled) {
       _options.push({
-        label: localize("com_ui_upload_ocr_text"),
+        label: localize('com_ui_upload_ocr_text'),
         value: undefined,
         icon: <FileType2Icon className="icon-md" />,
-        condition: files.every((file) => getFileType(file)?.startsWith("image/") || defaultOCRMimeTypes.some((regex) => regex.test(getFileType(file) || ""))),
+        condition: files.every(
+          (file) =>
+            getFileType(file)?.startsWith('image/') ||
+            defaultOCRMimeTypes.some((regex) => regex.test(getFileType(file) || '')),
+        ),
       });
     }
     if (capabilities.fileSearchEnabled && fileSearchAllowedByAgent) {

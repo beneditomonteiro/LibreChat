@@ -8,6 +8,7 @@ import { columns } from '../PanelColumns';
 
 const mockShowToast = jest.fn();
 const mockAddFile = jest.fn();
+const mockHandleFileChange = jest.fn();
 
 let mockFileMap: Record<string, TFile> = {};
 let mockFiles: Map<string, ExtendedFile> = new Map();
@@ -19,14 +20,41 @@ let mockRawFileConfig: Record<string, unknown> | null = {
 };
 
 jest.mock('@librechat/client', () => ({
+  Button: (() => {
+    const { forwardRef } = jest.requireActual<typeof import('react')>('react');
+    return forwardRef<
+      HTMLButtonElement,
+      { children?: React.ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>
+    >(({ children, ...props }, ref) => (
+      <button ref={ref} {...props}>
+        {children}
+      </button>
+    ));
+  })(),
+  Checkbox: ({
+    checked,
+    onCheckedChange,
+    ...props
+  }: {
+    checked?: boolean | 'indeterminate';
+    onCheckedChange?: (value: boolean) => void;
+  } & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'checked' | 'onChange'>) => {
+    let ariaChecked: 'true' | 'false' | 'mixed' = checked === true ? 'true' : 'false';
+    if (checked === 'indeterminate') {
+      ariaChecked = 'mixed';
+    }
+    return (
+      <input
+        type="checkbox"
+        checked={checked === true}
+        aria-checked={ariaChecked}
+        onChange={(event) => onCheckedChange?.(event.target.checked)}
+        {...props}
+      />
+    );
+  },
   Table: ({ children, ...props }: { children: React.ReactNode }) => (
     <table {...props}>{children}</table>
-  ),
-  Button: ({
-    children,
-    ...props
-  }: { children: React.ReactNode } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button {...props}>{children}</button>
   ),
   TableRow: ({ children, ...props }: { children: React.ReactNode }) => (
     <tr {...props}>{children}</tr>
@@ -62,6 +90,7 @@ jest.mock('~/Providers', () => ({
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string) => key,
   useUpdateFiles: () => ({ addFile: mockAddFile }),
+  useFileHandling: () => ({ handleFileChange: mockHandleFileChange }),
 }));
 
 jest.mock('~/data-provider', () => ({
@@ -124,6 +153,7 @@ describe('PanelTable handleFileClick', () => {
   beforeEach(() => {
     mockShowToast.mockClear();
     mockAddFile.mockClear();
+    mockHandleFileChange.mockClear();
     mockFiles = new Map();
     mockConversation = { endpoint: 'openAI' };
     mockRawFileConfig = {
@@ -235,5 +265,61 @@ describe('PanelTable handleFileClick', () => {
     clickFilenameCell();
 
     expect(mockAddFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('attaches multiple selected files from the bulk action bar', () => {
+    const first = makeFile({ file_id: 'bulk-1', filename: 'bulk-1.pdf' });
+    const second = makeFile({ file_id: 'bulk-2', filename: 'bulk-2.pdf' });
+    mockFileMap = {
+      [first.file_id]: first,
+      [second.file_id]: second,
+    };
+
+    renderTable([first, second]);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'com_ui_select_all' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_attach_selected' }));
+
+    expect(mockAddFile).toHaveBeenCalledTimes(2);
+    expect(mockAddFile).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        file_id: first.file_id,
+        attached: true,
+        progress: 1,
+      }),
+    );
+    expect(mockAddFile).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        file_id: second.file_id,
+        attached: true,
+        progress: 1,
+      }),
+    );
+  });
+
+  it('renders an upload button that opens the file picker and forwards changes', () => {
+    const file = makeFile();
+    mockFileMap = { [file.file_id]: file };
+
+    const clickSpy = jest.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(jest.fn());
+    const { container } = renderTable([file]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_upload_files' }));
+    expect(clickSpy).toHaveBeenCalled();
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).not.toBeNull();
+
+    const selectedFile = new File(['pdf'], 'provider.pdf', { type: 'application/pdf' });
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [selectedFile] },
+    });
+
+    expect(mockHandleFileChange).toHaveBeenCalledTimes(1);
+
+    clickSpy.mockRestore();
   });
 });
