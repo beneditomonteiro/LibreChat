@@ -8,10 +8,12 @@
  * Usage (inside the app container or repo root with deps installed):
  *   node scripts/seed-doc-agent.js
  */
-const mongoose = require('mongoose');
 const path = require('path');
 const fs = require('fs');
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
+const { connectDb } = require('~/db/connect');
+require('~/db');
+const mongoose = require('mongoose');
 const db = require('~/models');
 const { runAsSystem } = require('@librechat/data-schemas');
 
@@ -51,9 +53,7 @@ const seedAgents = async () => {
 };
 
 const run = async () => {
-  const mongoURI = process.env.MONGO_URI || 'mongodb://mongodb:27017/LibreChat';
-  console.log(`Connecting to ${mongoURI.replace(/\/\/[^@]*@/, '//<credentials>@')}...`);
-  await mongoose.connect(mongoURI);
+  await connectDb();
   console.log('Connected to MongoDB. Running seed...');
   try {
     await runAsSystem(seedAgents);
