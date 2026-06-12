@@ -109,7 +109,7 @@ describe('PanelFileCell TXT actions', () => {
     expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'smoke_scanned.txt');
   });
 
-  it('exports plain extracted text for any file type without previewing', () => {
+  it('exports plain extracted text for any file type without previewing', async () => {
     const file = makeFile({
       filename: 'report.md',
       type: 'text/markdown',
@@ -121,7 +121,7 @@ describe('PanelFileCell TXT actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_export_txt report.md' }));
 
     expect(mockFetchFilePreview).not.toHaveBeenCalled();
-    expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockCreateObjectURL).toHaveBeenCalledTimes(1));
     expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'report.txt');
   });
 

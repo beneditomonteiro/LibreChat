@@ -14,6 +14,7 @@ import {
   documentParserMimeTypes,
   EToolResources,
   FileSources,
+  dataService,
   fileConfig as defaultFileConfig,
 } from 'librechat-data-provider';
 import type { TFile, EndpointFileConfig, FileConfig } from 'librechat-data-provider';
@@ -92,17 +93,12 @@ export const toTxtFilename = (filename?: string): string => {
   return `${dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName}.txt`;
 };
 
-export const isNativeTextFile = (
-  file?: Pick<TFile, 'filename' | 'type'> | null,
-): boolean => {
+export const isNativeTextFile = (file?: Pick<TFile, 'filename' | 'type'> | null): boolean => {
   if (!file) {
     return false;
   }
 
-  return (
-    file.type === 'text/plain' ||
-    file.filename?.toLowerCase().endsWith('.txt') === true
-  );
+  return file.type === 'text/plain' || file.filename?.toLowerCase().endsWith('.txt') === true;
 };
 
 export const isTextLikeFile = (
@@ -409,3 +405,40 @@ export function sortPagesByRelevance(
   }
   return [...pages].sort((a, b) => (pageRelevance[b] || 0) - (pageRelevance[a] || 0));
 }
+
+export const canExportToTxt = (
+  file?: Pick<TFile, 'filename' | 'source' | 'textFormat' | 'type' | 'text'> | null,
+): boolean => {
+  if (!file || isNativeTextFile(file)) {
+    return false;
+  }
+  const hasPlainText = Boolean(normalizeExportText(file.text, file.textFormat));
+  const isTextFile = isTextLikeFile(file);
+  return hasPlainText || isTextFile;
+};
+
+export const resolveExportText = async (file: TFile, userId: string): Promise<string | null> => {
+  const directText = normalizeExportText(file.text, file.textFormat);
+  if (directText) {
+    return directText;
+  }
+
+  if (!file.file_id) {
+    return null;
+  }
+
+  try {
+    if (isTextLikeFile(file) && userId) {
+      const response = await dataService.getFileDownload(userId, file.file_id);
+      const blob = response.data as Blob;
+      const rawText = normalizeExportText(await blob.text(), file.textFormat);
+      if (rawText) {
+        return rawText;
+      }
+    }
+  } catch (error) {
+    console.error('[resolveExportText] TXT export failed:', error);
+  }
+
+  return null;
+};

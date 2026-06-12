@@ -336,18 +336,18 @@ describe('PanelTable handleFileClick', () => {
     const first = makeFile({
       file_id: 'txt-1',
       filename: 'invoice.pdf',
-      type: 'text/plain',
+      type: 'application/pdf',
       text: 'first export',
       textFormat: 'text',
-      source: FileSources.text,
+      source: FileSources.local,
     });
     const second = makeFile({
       file_id: 'txt-2',
-      filename: 'notes.txt',
-      type: 'text/plain',
+      filename: 'notes.md',
+      type: 'text/markdown',
       text: 'second export',
       textFormat: 'text',
-      source: FileSources.text,
+      source: FileSources.local,
     });
     mockFileMap = {
       [first.file_id]: first,

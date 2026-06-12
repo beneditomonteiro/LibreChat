@@ -6,27 +6,20 @@ import type { Row } from '@tanstack/react-table';
 import type { TFile } from 'librechat-data-provider';
 import ImagePreview from '~/components/Chat/Input/Files/ImagePreview';
 import FilePreview from '~/components/Chat/Input/Files/FilePreview';
-import { fetchFilePreview, useFileDownload } from '~/data-provider';
+import { useFileDownload } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 import {
   createTextDownloadUrl,
   getDownloadFilename,
   getFileType,
   isTextLikeFile,
-  isNativeTextFile,
+  canExportToTxt,
+  resolveExportText,
   normalizeExportText,
   toTxtFilename,
   triggerDownload,
 } from '~/utils';
 import store from '~/store';
-
-const PREVIEW_RETRY_COUNT = 4;
-const PREVIEW_RETRY_DELAY_MS = 1250;
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 
 export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) {
   const file = row.original;
@@ -43,14 +36,8 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
     [file?.filename, file?.type],
   );
   const isTextFile = useMemo(() => isTextLikeFile(file), [file]);
-  const isAlreadyTxt = useMemo(() => isNativeTextFile(file), [file]);
 
-  const hasPlainText = useMemo(
-    () => Boolean(normalizeExportText(file?.text, file?.textFormat)),
-    [file?.text, file?.textFormat],
-  );
-
-  const showTxtAction = (hasPlainText || isTextFile) && !isAlreadyTxt;
+  const showTxtAction = useMemo(() => canExportToTxt(file), [file]);
   const txtActionLabel = isPdf ? localize('com_ui_convert_pdf_txt') : localize('com_ui_export_txt');
   const downloadFilename = useMemo(() => getDownloadFilename(file), [file]);
   const txtFilename = useMemo(() => toTxtFilename(file?.filename), [file?.filename]);
@@ -104,78 +91,15 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
   const handleTxtAction = useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
-      if (!file?.file_id || (!hasPlainText && !isPdf && !isTextFile)) {
+      if (!file?.file_id) {
         return;
       }
 
       try {
-        const directText = normalizeExportText(file.text, file.textFormat);
-        let previewResult: Awaited<ReturnType<typeof fetchFilePreview>> | undefined;
-
-        if (isPdf) {
-          previewResult = await fetchFilePreview(file.file_id);
-          let previewText = normalizeExportText(previewResult.text, previewResult.textFormat);
-
-          if (previewText) {
-            triggerDownload(createTextDownloadUrl(previewText), txtFilename);
-            return;
-          }
-
-          if (previewResult.status === 'pending') {
-            for (let attempt = 0; attempt < PREVIEW_RETRY_COUNT; attempt += 1) {
-              await sleep(PREVIEW_RETRY_DELAY_MS);
-              const retryResult = await fetchFilePreview(file.file_id);
-              previewText = normalizeExportText(retryResult.text, retryResult.textFormat);
-              if (previewText) {
-                triggerDownload(createTextDownloadUrl(previewText), txtFilename);
-                return;
-              }
-              if (retryResult.status !== 'pending') {
-                previewResult = retryResult;
-                break;
-              }
-              previewResult = retryResult;
-            }
-          }
-
-          if (directText) {
-            triggerDownload(createTextDownloadUrl(directText), txtFilename);
-            return;
-          }
-
-          showToast({
-            message:
-              previewResult?.status === 'pending'
-                ? localize('com_ui_pdf_text_pending')
-                : localize('com_ui_pdf_text_unavailable'),
-            status: 'warning',
-          });
+        const text = await resolveExportText(file, user?.id ?? '');
+        if (text) {
+          triggerDownload(createTextDownloadUrl(text), txtFilename);
           return;
-        }
-
-        if (directText) {
-          triggerDownload(createTextDownloadUrl(directText), txtFilename);
-          return;
-        }
-
-        if (isTextFile) {
-          previewResult = await fetchFilePreview(file.file_id);
-          const previewText = normalizeExportText(previewResult.text, previewResult.textFormat);
-          if (previewText) {
-            triggerDownload(createTextDownloadUrl(previewText), txtFilename);
-            return;
-          }
-
-          const result = await downloadFile();
-          if (result.data) {
-            const response = await fetch(result.data);
-            const blob = await response.blob();
-            const text = normalizeExportText(await blob.text(), file.textFormat);
-            if (text) {
-              triggerDownload(createTextDownloadUrl(text), txtFilename);
-              return;
-            }
-          }
         }
 
         showToast({
@@ -190,18 +114,7 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
         });
       }
     },
-    [
-      downloadFile,
-      file?.file_id,
-      file?.text,
-      file?.textFormat,
-      hasPlainText,
-      isPdf,
-      isTextFile,
-      localize,
-      showToast,
-      txtFilename,
-    ],
+    [file, localize, showToast, txtFilename, user?.id],
   );
 
   if (!file) {

@@ -28,7 +28,6 @@ import {
 } from '@tanstack/react-table';
 import {
   megabyte,
-  dataService,
   mergeFileConfig,
   checkOpenAIStorage,
   isAssistantsEndpoint,
@@ -40,12 +39,11 @@ import { MyFilesModal } from '~/components/Chat/Input/Files/MyFilesModal';
 import { useFileMapContext, useChatContext } from '~/Providers';
 import type { ExtendedFile } from '~/common';
 import { useFileHandling, useLocalize, useUpdateFiles } from '~/hooks';
-import { fetchFilePreview, useGetFileConfig } from '~/data-provider';
+import { useGetFileConfig } from '~/data-provider';
 import {
   createTextDownloadUrl,
-  isTextLikeFile,
-  isNativeTextFile,
-  normalizeExportText,
+  canExportToTxt,
+  resolveExportText,
   toTxtFilename,
   triggerDownload,
 } from '~/utils';
@@ -86,11 +84,6 @@ const getCellClass = (columnId: string): string => {
   }
   return '';
 };
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
 
 export default function DataTable<TData, TValue>({ columns, data }: DataTableProps<TData, TValue>) {
   const localize = useLocalize();
@@ -313,69 +306,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
     .rows.map((row) => row.original as TFile)
     .filter((file): file is TFile => Boolean(file));
 
-  const canExportToTxt = useCallback((file: TFile) => {
-    if (isNativeTextFile(file)) {
-      return false;
-    }
-    const hasPlainText = Boolean(normalizeExportText(file.text, file.textFormat));
-    const isTextFile = isTextLikeFile(file);
-    return hasPlainText || isTextFile;
-  }, []);
-
-  const showExportTxtTopButton = useMemo(
-    () => selectedFiles.some(canExportToTxt),
-    [selectedFiles, canExportToTxt]
-  );
-
-  const resolveExportText = useCallback(
-    async (file: TFile): Promise<string | null> => {
-      const directText = normalizeExportText(file.text, file.textFormat);
-      if (directText) {
-        return directText;
-      }
-
-      if (!file.file_id) {
-        return null;
-      }
-
-      try {
-        let preview = await fetchFilePreview(file.file_id);
-        let previewText = normalizeExportText(preview.text, preview.textFormat);
-
-        if (previewText) {
-          return previewText;
-        }
-
-        if (preview.status === 'pending') {
-          for (let attempt = 0; attempt < 4; attempt += 1) {
-            await sleep(1250);
-            preview = await fetchFilePreview(file.file_id);
-            previewText = normalizeExportText(preview.text, preview.textFormat);
-            if (previewText) {
-              return previewText;
-            }
-            if (preview.status !== 'pending') {
-              break;
-            }
-          }
-        }
-
-        if (isTextLikeFile(file) && user?.id) {
-          const response = await dataService.getFileDownload(user.id, file.file_id);
-          const blob = response.data as Blob;
-          const rawText = normalizeExportText(await blob.text(), file.textFormat);
-          if (rawText) {
-            return rawText;
-          }
-        }
-      } catch (error) {
-        console.error('[PanelTable] TXT export failed:', error);
-      }
-
-      return null;
-    },
-    [user?.id],
-  );
+  const showExportTxtTopButton = useMemo(() => selectedFiles.some(canExportToTxt), [selectedFiles]);
 
   const handleClearSelection = useCallback(() => {
     table.resetRowSelection();
@@ -406,7 +337,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
     const exportEntries: Array<{ filename: string; text: string }> = [];
 
     for (const file of selectedFiles) {
-      const text = await resolveExportText(file);
+      const text = await resolveExportText(file, user?.id ?? '');
       if (text) {
         exportEntries.push({ filename: toTxtFilename(file.filename), text });
       }
@@ -436,7 +367,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
     triggerDownload(url, 'selected-files.zip');
 
     table.resetRowSelection();
-  }, [localize, resolveExportText, selectedFiles, showToast, table]);
+  }, [localize, selectedFiles, showToast, table, user?.id]);
 
   return (
     <div role="region" aria-label={localize('com_files_table')} className="space-y-2">
