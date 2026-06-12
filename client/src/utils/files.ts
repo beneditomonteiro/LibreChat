@@ -92,6 +92,19 @@ export const toTxtFilename = (filename?: string): string => {
   return `${dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName}.txt`;
 };
 
+export const isNativeTextFile = (
+  file?: Pick<TFile, 'filename' | 'type'> | null,
+): boolean => {
+  if (!file) {
+    return false;
+  }
+
+  return (
+    file.type === 'text/plain' ||
+    file.filename?.toLowerCase().endsWith('.txt') === true
+  );
+};
+
 export const isTextLikeFile = (
   file?: Pick<TFile, 'filename' | 'source' | 'textFormat' | 'type'> | null,
 ): boolean => {

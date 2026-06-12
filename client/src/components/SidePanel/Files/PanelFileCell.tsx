@@ -13,6 +13,7 @@ import {
   getDownloadFilename,
   getFileType,
   isTextLikeFile,
+  isNativeTextFile,
   normalizeExportText,
   toTxtFilename,
   triggerDownload,
@@ -42,13 +43,14 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
     [file?.filename, file?.type],
   );
   const isTextFile = useMemo(() => isTextLikeFile(file), [file]);
+  const isAlreadyTxt = useMemo(() => isNativeTextFile(file), [file]);
 
   const hasPlainText = useMemo(
     () => Boolean(normalizeExportText(file?.text, file?.textFormat)),
     [file?.text, file?.textFormat],
   );
 
-  const showTxtAction = hasPlainText || isPdf || isTextFile;
+  const showTxtAction = (hasPlainText || isPdf || isTextFile) && !isAlreadyTxt;
   const txtActionLabel = isPdf ? localize('com_ui_convert_pdf_txt') : localize('com_ui_export_txt');
   const downloadFilename = useMemo(() => getDownloadFilename(file), [file]);
   const txtFilename = useMemo(() => toTxtFilename(file?.filename), [file?.filename]);

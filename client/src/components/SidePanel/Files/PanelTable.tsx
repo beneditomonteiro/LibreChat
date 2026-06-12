@@ -44,6 +44,7 @@ import { fetchFilePreview, useGetFileConfig } from '~/data-provider';
 import {
   createTextDownloadUrl,
   isTextLikeFile,
+  isNativeTextFile,
   normalizeExportText,
   toTxtFilename,
   triggerDownload,
@@ -312,6 +313,11 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
     .rows.map((row) => row.original as TFile)
     .filter((file): file is TFile => Boolean(file));
 
+  const showExportTxtTopButton = useMemo(
+    () => selectedFiles.some((file) => !isNativeTextFile(file)),
+    [selectedFiles]
+  );
+
   const resolveExportText = useCallback(
     async (file: TFile): Promise<string | null> => {
       const directText = normalizeExportText(file.text, file.textFormat);
@@ -471,17 +477,19 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
               <Paperclip className="h-4 w-4" aria-hidden="true" />
               <span className="ml-2">{localize('com_ui_attach_selected')}</span>
             </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleExportSelectedTxt}
-              disabled={!selectedFiles.length}
-              aria-label={localize('com_ui_export_txt')}
-            >
-              <FileText className="h-4 w-4" aria-hidden="true" />
-              <span className="ml-2">{localize('com_ui_export_txt')}</span>
-            </Button>
+            {showExportTxtTopButton && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleExportSelectedTxt}
+                disabled={!selectedFiles.length}
+                aria-label={localize('com_ui_export_txt')}
+              >
+                <FileText className="h-4 w-4" aria-hidden="true" />
+                <span className="ml-2">{localize('com_ui_export_txt')}</span>
+              </Button>
+            )}
             <Button
               type="button"
               variant="ghost"

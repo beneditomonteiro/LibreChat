@@ -126,6 +126,7 @@ jest.mock('~/utils', () => {
   const actual = jest.requireActual<typeof import('~/utils')>('~/utils');
   return {
     ...actual,
+    isNativeTextFile: jest.fn((file) => Boolean(file?.filename?.endsWith('.txt'))),
     triggerDownload: (...args: Parameters<typeof mockTriggerDownload>) =>
       mockTriggerDownload(...args),
   };
