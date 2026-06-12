@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { ArrowUpLeft, FileText, FileUp, Paperclip, X } from 'lucide-react';
+import JSZip from 'jszip';
 import {
   Table,
   Button,
@@ -27,6 +28,7 @@ import {
 } from '@tanstack/react-table';
 import {
   megabyte,
+  dataService,
   mergeFileConfig,
   checkOpenAIStorage,
   isAssistantsEndpoint,
@@ -38,19 +40,21 @@ import { MyFilesModal } from '~/components/Chat/Input/Files/MyFilesModal';
 import { useFileMapContext, useChatContext } from '~/Providers';
 import type { ExtendedFile } from '~/common';
 import { useFileHandling, useLocalize, useUpdateFiles } from '~/hooks';
-import { useGetFileConfig } from '~/data-provider';
-import { triggerDownload } from '~/utils';
+import { fetchFilePreview, useGetFileConfig } from '~/data-provider';
+import {
+  createTextDownloadUrl,
+  isTextLikeFile,
+  normalizeExportText,
+  toTxtFilename,
+  triggerDownload,
+} from '~/utils';
+import { useRecoilValue } from 'recoil';
+import store from '~/store';
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
 }
-
-const toTxtFilename = (filename?: string) => {
-  const baseName = filename ?? 'file';
-  const dotIndex = baseName.lastIndexOf('.');
-  return `${dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName}.txt`;
-};
 
 const getColumnWidth = (columnId: string): string => {
   if (columnId === 'select') {
@@ -82,6 +86,11 @@ const getCellClass = (columnId: string): string => {
   return '';
 };
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+
 export default function DataTable<TData, TValue>({ columns, data }: DataTableProps<TData, TValue>) {
   const localize = useLocalize();
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -95,6 +104,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
 
   const fileMap = useFileMapContext();
   const { showToast } = useToastContext();
+  const user = useRecoilValue(store.user);
   const { files, setFiles, conversation } = useChatContext();
   const { handleFileChange } = useFileHandling();
   const { data: fileConfig = null } = useGetFileConfig({
@@ -301,8 +311,55 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
     .getSelectedRowModel()
     .rows.map((row) => row.original as TFile)
     .filter((file): file is TFile => Boolean(file));
-  const exportableSelectedFiles = selectedFiles.filter(
-    (file) => Boolean(file.text?.trim()) && file.textFormat !== 'html',
+
+  const resolveExportText = useCallback(
+    async (file: TFile): Promise<string | null> => {
+      const directText = normalizeExportText(file.text, file.textFormat);
+      if (directText) {
+        return directText;
+      }
+
+      if (!file.file_id) {
+        return null;
+      }
+
+      try {
+        let preview = await fetchFilePreview(file.file_id);
+        let previewText = normalizeExportText(preview.text, preview.textFormat);
+
+        if (previewText) {
+          return previewText;
+        }
+
+        if (preview.status === 'pending') {
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            await sleep(1250);
+            preview = await fetchFilePreview(file.file_id);
+            previewText = normalizeExportText(preview.text, preview.textFormat);
+            if (previewText) {
+              return previewText;
+            }
+            if (preview.status !== 'pending') {
+              break;
+            }
+          }
+        }
+
+        if (isTextLikeFile(file) && user?.id) {
+          const response = await dataService.getFileDownload(user.id, file.file_id);
+          const blob = response.data as Blob;
+          const rawText = normalizeExportText(await blob.text(), file.textFormat);
+          if (rawText) {
+            return rawText;
+          }
+        }
+      } catch (error) {
+        console.error('[PanelTable] TXT export failed:', error);
+      }
+
+      return null;
+    },
+    [user?.id],
   );
 
   const handleClearSelection = useCallback(() => {
@@ -322,8 +379,8 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
     table.resetRowSelection();
   }, [attachFile, files, selectedFiles, table]);
 
-  const handleExportSelectedTxt = useCallback(() => {
-    if (!exportableSelectedFiles.length) {
+  const handleExportSelectedTxt = useCallback(async () => {
+    if (!selectedFiles.length) {
       showToast({
         message: localize('com_ui_export_txt_none'),
         status: 'warning',
@@ -331,19 +388,40 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
       return;
     }
 
-    for (const file of exportableSelectedFiles) {
-      const text = file.text?.trim();
-      if (!text) {
-        continue;
-      }
+    const exportEntries: Array<{ filename: string; text: string }> = [];
 
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      triggerDownload(url, toTxtFilename(file.filename));
+    for (const file of selectedFiles) {
+      const text = await resolveExportText(file);
+      if (text) {
+        exportEntries.push({ filename: toTxtFilename(file.filename), text });
+      }
     }
 
+    if (!exportEntries.length) {
+      showToast({
+        message: localize('com_ui_export_txt_none'),
+        status: 'warning',
+      });
+      return;
+    }
+
+    if (selectedFiles.length === 1 && exportEntries.length === 1) {
+      const [entry] = exportEntries;
+      triggerDownload(createTextDownloadUrl(entry.text), entry.filename);
+      table.resetRowSelection();
+      return;
+    }
+
+    const zip = new JSZip();
+    for (const entry of exportEntries) {
+      zip.file(entry.filename, entry.text);
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, 'selected-files.zip');
+
     table.resetRowSelection();
-  }, [exportableSelectedFiles, localize, showToast, table]);
+  }, [localize, resolveExportText, selectedFiles, showToast, table]);
 
   return (
     <div role="region" aria-label={localize('com_files_table')} className="space-y-2">
@@ -398,7 +476,7 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
               variant="outline"
               size="sm"
               onClick={handleExportSelectedTxt}
-              disabled={!exportableSelectedFiles.length}
+              disabled={!selectedFiles.length}
               aria-label={localize('com_ui_export_txt')}
             >
               <FileText className="h-4 w-4" aria-hidden="true" />

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FileSources } from 'librechat-data-provider';
 import type { TFile } from 'librechat-data-provider';
 import type { ExtendedFile } from '~/common';
@@ -9,6 +9,9 @@ import { columns } from '../PanelColumns';
 const mockShowToast = jest.fn();
 const mockAddFile = jest.fn();
 const mockHandleFileChange = jest.fn();
+const mockFetchFilePreview = jest.fn();
+const mockTriggerDownload = jest.fn();
+let mockCreateObjectURL: jest.Mock;
 
 let mockFileMap: Record<string, TFile> = {};
 let mockFiles: Map<string, ExtendedFile> = new Map();
@@ -78,6 +81,17 @@ jest.mock('@librechat/client', () => ({
   useToastContext: () => ({ showToast: mockShowToast }),
 }));
 
+jest.mock('recoil', () => ({
+  useRecoilValue: () => ({ id: 'user-1' }),
+}));
+
+jest.mock('~/store', () => ({
+  __esModule: true,
+  default: {
+    user: {},
+  },
+}));
+
 jest.mock('~/Providers', () => ({
   useFileMapContext: () => mockFileMap,
   useChatContext: () => ({
@@ -97,6 +111,7 @@ jest.mock('~/data-provider', () => ({
   useGetFileConfig: ({ select }: { select?: (d: unknown) => unknown }) => ({
     data: select != null ? select(mockRawFileConfig) : mockRawFileConfig,
   }),
+  fetchFilePreview: (...args: unknown[]) => mockFetchFilePreview(...args),
 }));
 
 jest.mock('~/components/Chat/Input/Files/MyFilesModal', () => ({
@@ -106,6 +121,15 @@ jest.mock('~/components/Chat/Input/Files/MyFilesModal', () => ({
 jest.mock('../PanelFileCell', () => ({ row }: { row: { original: TFile } }) => (
   <span>{row.original?.filename}</span>
 ));
+
+jest.mock('~/utils', () => {
+  const actual = jest.requireActual<typeof import('~/utils')>('~/utils');
+  return {
+    ...actual,
+    triggerDownload: (...args: Parameters<typeof mockTriggerDownload>) =>
+      mockTriggerDownload(...args),
+  };
+});
 
 function makeFile(overrides: Partial<TFile> = {}): TFile {
   return {
@@ -154,6 +178,8 @@ describe('PanelTable handleFileClick', () => {
     mockShowToast.mockClear();
     mockAddFile.mockClear();
     mockHandleFileChange.mockClear();
+    mockFetchFilePreview.mockClear();
+    mockTriggerDownload.mockClear();
     mockFiles = new Map();
     mockConversation = { endpoint: 'openAI' };
     mockRawFileConfig = {
@@ -165,6 +191,11 @@ describe('PanelTable handleFileClick', () => {
         },
       },
     };
+    mockCreateObjectURL = jest.fn(() => 'blob:zip');
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: mockCreateObjectURL,
+    });
   });
 
   it('calls addFile when within file limits', () => {
@@ -298,6 +329,38 @@ describe('PanelTable handleFileClick', () => {
         progress: 1,
       }),
     );
+  });
+
+  it('exports multiple selected text files as a single zip archive', async () => {
+    const first = makeFile({
+      file_id: 'txt-1',
+      filename: 'invoice.pdf',
+      type: 'text/plain',
+      text: 'first export',
+      textFormat: 'text',
+      source: FileSources.text,
+    });
+    const second = makeFile({
+      file_id: 'txt-2',
+      filename: 'notes.txt',
+      type: 'text/plain',
+      text: 'second export',
+      textFormat: 'text',
+      source: FileSources.text,
+    });
+    mockFileMap = {
+      [first.file_id]: first,
+      [second.file_id]: second,
+    };
+
+    renderTable([first, second]);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'com_ui_select_all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_export_txt' }));
+
+    await waitFor(() => expect(mockTriggerDownload).toHaveBeenCalledTimes(1));
+    expect(mockTriggerDownload).toHaveBeenCalledWith('blob:zip', 'selected-files.zip');
+    expect(mockFetchFilePreview).not.toHaveBeenCalled();
   });
 
   it('renders an upload button that opens the file picker and forwards changes', () => {

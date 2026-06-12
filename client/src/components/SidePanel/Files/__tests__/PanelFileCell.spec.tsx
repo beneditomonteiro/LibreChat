@@ -6,7 +6,7 @@ import PanelFileCell from '../PanelFileCell';
 
 const mockShowToast = jest.fn();
 const mockDownloadRefetch = jest.fn();
-const mockPreviewRefetch = jest.fn();
+const mockFetchFilePreview = jest.fn();
 let mockCreateObjectURL: jest.Mock;
 
 jest.mock('@librechat/client', () => ({
@@ -21,7 +21,7 @@ jest.mock('@librechat/client', () => ({
 
 jest.mock('~/data-provider', () => ({
   useFileDownload: () => ({ refetch: mockDownloadRefetch }),
-  useFilePreview: () => ({ refetch: mockPreviewRefetch }),
+  fetchFilePreview: (...args: unknown[]) => mockFetchFilePreview(...args),
 }));
 
 jest.mock('~/hooks', () => ({
@@ -29,6 +29,7 @@ jest.mock('~/hooks', () => ({
 }));
 
 jest.mock('~/utils', () => ({
+  ...jest.requireActual<typeof import('~/utils')>('~/utils'),
   getFileType: jest.fn(() => 'text'),
   triggerDownload: jest.fn(),
 }));
@@ -80,13 +81,31 @@ describe('PanelFileCell TXT actions', () => {
   beforeEach(() => {
     mockShowToast.mockClear();
     mockDownloadRefetch.mockClear();
-    mockPreviewRefetch.mockClear();
+    mockFetchFilePreview.mockClear();
     mockTriggerDownload.mockClear();
+    mockDownloadRefetch.mockResolvedValue({ data: 'blob:download' });
     mockCreateObjectURL = jest.fn(() => 'blob:txt');
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: mockCreateObjectURL,
     });
+  });
+
+  it('downloads text-like files with a .txt filename', async () => {
+    const file = makeFile({
+      filename: 'smoke_scanned.pdf',
+      type: 'text/plain',
+      text: 'hello world',
+      textFormat: 'text',
+      source: FileSources.text,
+    });
+
+    renderCell(file);
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_download smoke_scanned.pdf' }));
+
+    expect(mockDownloadRefetch).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockCreateObjectURL).toHaveBeenCalledTimes(1));
+    expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'smoke_scanned.txt');
   });
 
   it('exports plain extracted text for any file type without previewing', () => {
@@ -100,14 +119,33 @@ describe('PanelFileCell TXT actions', () => {
     renderCell(file);
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_export_txt report.md' }));
 
-    expect(mockPreviewRefetch).not.toHaveBeenCalled();
+    expect(mockFetchFilePreview).not.toHaveBeenCalled();
     expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
     expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'report.txt');
   });
 
+  it('normalizes html text before exporting txt', async () => {
+    const file = makeFile({
+      filename: 'office.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      text: '<p>Hello <strong>world</strong></p>',
+      textFormat: 'html',
+    });
+
+    renderCell(file);
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_export_txt office.docx' }));
+
+    await waitFor(() => expect(mockCreateObjectURL).toHaveBeenCalledTimes(1));
+    expect(mockCreateObjectURL.mock.calls[0]?.[0]).toBeInstanceOf(Blob);
+    expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'office.txt');
+  });
+
   it('falls back to PDF preview conversion when no extracted text exists yet', async () => {
-    mockPreviewRefetch.mockResolvedValue({
-      data: { file_id: 'file-1', status: 'ready', text: 'converted text', textFormat: 'text' },
+    mockFetchFilePreview.mockResolvedValue({
+      file_id: 'file-1',
+      status: 'ready',
+      text: 'converted text',
+      textFormat: 'text',
     });
     const file = makeFile({
       filename: 'scan.pdf',
@@ -119,7 +157,7 @@ describe('PanelFileCell TXT actions', () => {
     renderCell(file);
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_convert_pdf_txt scan.pdf' }));
 
-    await waitFor(() => expect(mockPreviewRefetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockFetchFilePreview).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'scan.txt'));
     expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
   });

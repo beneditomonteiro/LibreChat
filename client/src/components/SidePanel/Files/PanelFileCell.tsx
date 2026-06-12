@@ -6,10 +6,26 @@ import type { Row } from '@tanstack/react-table';
 import type { TFile } from 'librechat-data-provider';
 import ImagePreview from '~/components/Chat/Input/Files/ImagePreview';
 import FilePreview from '~/components/Chat/Input/Files/FilePreview';
-import { useFileDownload, useFilePreview } from '~/data-provider';
+import { fetchFilePreview, useFileDownload } from '~/data-provider';
 import { useLocalize } from '~/hooks';
-import { getFileType, triggerDownload } from '~/utils';
+import {
+  createTextDownloadUrl,
+  getDownloadFilename,
+  getFileType,
+  isTextLikeFile,
+  normalizeExportText,
+  toTxtFilename,
+  triggerDownload,
+} from '~/utils';
 import store from '~/store';
+
+const PREVIEW_RETRY_COUNT = 4;
+const PREVIEW_RETRY_DELAY_MS = 1250;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 
 export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) {
   const file = row.original;
@@ -18,32 +34,24 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
   const user = useRecoilValue(store.user);
   const { refetch: downloadFile } = useFileDownload(user?.id ?? '', file?.file_id, {
     source: file?.source,
-  });
-  const { refetch: fetchPreview } = useFilePreview(file?.file_id, {
-    enabled: false,
-    retry: false,
+    direct: false,
   });
 
   const isPdf = useMemo(
     () => Boolean(file?.type?.includes('pdf') || file?.filename?.toLowerCase().endsWith('.pdf')),
     [file?.filename, file?.type],
   );
-
-  const baseName = useMemo(() => {
-    const filename = file?.filename ?? 'file';
-    const dotIndex = filename.lastIndexOf('.');
-    return dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
-  }, [file?.filename]);
+  const isTextFile = useMemo(() => isTextLikeFile(file), [file]);
 
   const hasPlainText = useMemo(
-    () => Boolean(file?.text?.trim() && file.textFormat !== 'html'),
+    () => Boolean(normalizeExportText(file?.text, file?.textFormat)),
     [file?.text, file?.textFormat],
   );
 
-  const showTxtAction = hasPlainText || isPdf;
-  const txtActionLabel = hasPlainText
-    ? localize('com_ui_export_txt')
-    : localize('com_ui_convert_pdf_txt');
+  const showTxtAction = hasPlainText || isPdf || isTextFile;
+  const txtActionLabel = isPdf ? localize('com_ui_convert_pdf_txt') : localize('com_ui_export_txt');
+  const downloadFilename = useMemo(() => getDownloadFilename(file), [file]);
+  const txtFilename = useMemo(() => toTxtFilename(file?.filename), [file?.filename]);
 
   const handleDownload = useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -53,6 +61,14 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
       }
 
       try {
+        if (isTextFile) {
+          const inlineText = normalizeExportText(file.text, file.textFormat);
+          if (inlineText) {
+            triggerDownload(createTextDownloadUrl(inlineText), downloadFilename);
+            return;
+          }
+        }
+
         const result = await downloadFile();
         if (!result.data) {
           showToast({
@@ -62,7 +78,7 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
           return;
         }
 
-        triggerDownload(result.data, file.filename ?? 'file');
+        triggerDownload(result.data, downloadFilename);
       } catch (error) {
         console.error('[PanelFileCell] file download failed:', error);
         showToast({
@@ -71,32 +87,63 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
         });
       }
     },
-    [downloadFile, file?.file_id, file?.filename, localize, showToast],
+    [
+      downloadFile,
+      downloadFilename,
+      file?.file_id,
+      file?.text,
+      file?.textFormat,
+      isTextFile,
+      localize,
+      showToast,
+    ],
   );
 
   const handleTxtAction = useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
-      if (!file?.file_id || (!hasPlainText && !isPdf)) {
+      if (!file?.file_id || (!hasPlainText && !isPdf && !isTextFile)) {
         return;
       }
 
       try {
-        if (hasPlainText) {
-          const text = file.text?.trim() ?? '';
-          const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          triggerDownload(url, `${baseName}.txt`);
-          return;
-        }
+        const directText = normalizeExportText(file.text, file.textFormat);
+        let previewResult: Awaited<ReturnType<typeof fetchFilePreview>> | undefined;
 
-        const result = await fetchPreview();
-        const text = result.data?.text ?? file.text ?? '';
+        if (isPdf) {
+          previewResult = await fetchFilePreview(file.file_id);
+          let previewText = normalizeExportText(previewResult.text, previewResult.textFormat);
 
-        if (!text.trim()) {
+          if (previewText) {
+            triggerDownload(createTextDownloadUrl(previewText), txtFilename);
+            return;
+          }
+
+          if (previewResult.status === 'pending') {
+            for (let attempt = 0; attempt < PREVIEW_RETRY_COUNT; attempt += 1) {
+              await sleep(PREVIEW_RETRY_DELAY_MS);
+              const retryResult = await fetchFilePreview(file.file_id);
+              previewText = normalizeExportText(retryResult.text, retryResult.textFormat);
+              if (previewText) {
+                triggerDownload(createTextDownloadUrl(previewText), txtFilename);
+                return;
+              }
+              if (retryResult.status !== 'pending') {
+                previewResult = retryResult;
+                break;
+              }
+              previewResult = retryResult;
+            }
+          }
+
+          if (directText) {
+            triggerDownload(createTextDownloadUrl(directText), txtFilename);
+            return;
+          }
+
           showToast({
             message:
-              result.data?.status === 'pending'
+              previewResult?.status === 'pending'
                 ? localize('com_ui_pdf_text_pending')
                 : localize('com_ui_pdf_text_unavailable'),
             status: 'warning',
@@ -104,9 +151,35 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
           return;
         }
 
-        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        triggerDownload(url, `${baseName}.txt`);
+        if (directText) {
+          triggerDownload(createTextDownloadUrl(directText), txtFilename);
+          return;
+        }
+
+        if (isTextFile) {
+          previewResult = await fetchFilePreview(file.file_id);
+          const previewText = normalizeExportText(previewResult.text, previewResult.textFormat);
+          if (previewText) {
+            triggerDownload(createTextDownloadUrl(previewText), txtFilename);
+            return;
+          }
+
+          const result = await downloadFile();
+          if (result.data) {
+            const response = await fetch(result.data);
+            const blob = await response.blob();
+            const text = normalizeExportText(await blob.text(), file.textFormat);
+            if (text) {
+              triggerDownload(createTextDownloadUrl(text), txtFilename);
+              return;
+            }
+          }
+        }
+
+        showToast({
+          message: localize('com_ui_export_txt_error'),
+          status: 'warning',
+        });
       } catch (error) {
         console.error('[PanelFileCell] TXT export failed:', error);
         showToast({
@@ -115,7 +188,18 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
         });
       }
     },
-    [baseName, fetchPreview, file?.file_id, file?.text, hasPlainText, isPdf, localize, showToast],
+    [
+      downloadFile,
+      file?.file_id,
+      file?.text,
+      file?.textFormat,
+      hasPlainText,
+      isPdf,
+      isTextFile,
+      localize,
+      showToast,
+      txtFilename,
+    ],
   );
 
   if (!file) {

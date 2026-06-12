@@ -13,6 +13,7 @@ import {
   excelMimeTypes,
   documentParserMimeTypes,
   EToolResources,
+  FileSources,
   fileConfig as defaultFileConfig,
 } from 'librechat-data-provider';
 import type { TFile, EndpointFileConfig, FileConfig } from 'librechat-data-provider';
@@ -83,6 +84,70 @@ export const fileTypes = {
   // 'text/html':,
   // 'text/css':,
   // image,
+};
+
+export const toTxtFilename = (filename?: string): string => {
+  const baseName = filename ?? 'file';
+  const dotIndex = baseName.lastIndexOf('.');
+  return `${dotIndex > 0 ? baseName.slice(0, dotIndex) : baseName}.txt`;
+};
+
+export const isTextLikeFile = (
+  file?: Pick<TFile, 'filename' | 'source' | 'textFormat' | 'type'> | null,
+): boolean => {
+  if (!file) {
+    return false;
+  }
+
+  return (
+    file.source === FileSources.text ||
+    file.textFormat === 'text' ||
+    file.type?.startsWith('text/') === true ||
+    file.filename?.toLowerCase().endsWith('.txt') === true
+  );
+};
+
+export const getDownloadFilename = (
+  file?: Pick<TFile, 'filename' | 'source' | 'textFormat' | 'type'> | null,
+): string => {
+  if (!file?.filename) {
+    return 'file';
+  }
+
+  return isTextLikeFile(file) ? toTxtFilename(file.filename) : file.filename;
+};
+
+export const htmlToPlainText = (html: string): string => {
+  if (!html) {
+    return '';
+  }
+
+  if (typeof DOMParser === 'undefined') {
+    return html
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  return parsed.body.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+};
+
+export const normalizeExportText = (
+  text?: string | null,
+  textFormat?: 'html' | 'text' | null,
+): string => {
+  const value = text?.trim() ?? '';
+  if (!value) {
+    return '';
+  }
+
+  return textFormat === 'html' ? htmlToPlainText(value) : value;
+};
+
+export const createTextDownloadUrl = (text: string): string => {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  return URL.createObjectURL(blob);
 };
 
 // export const getFileType = (type = '') => {
