@@ -313,9 +313,18 @@ export default function DataTable<TData, TValue>({ columns, data }: DataTablePro
     .rows.map((row) => row.original as TFile)
     .filter((file): file is TFile => Boolean(file));
 
+  const canExportToTxt = useCallback((file: TFile) => {
+    if (isNativeTextFile(file)) {
+      return false;
+    }
+    const hasPlainText = Boolean(normalizeExportText(file.text, file.textFormat));
+    const isTextFile = isTextLikeFile(file);
+    return hasPlainText || isTextFile;
+  }, []);
+
   const showExportTxtTopButton = useMemo(
-    () => selectedFiles.some((file) => !isNativeTextFile(file)),
-    [selectedFiles]
+    () => selectedFiles.some(canExportToTxt),
+    [selectedFiles, canExportToTxt]
   );
 
   const resolveExportText = useCallback(

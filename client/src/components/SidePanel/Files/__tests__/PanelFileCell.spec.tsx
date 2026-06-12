@@ -140,26 +140,4 @@ describe('PanelFileCell TXT actions', () => {
     expect(mockCreateObjectURL.mock.calls[0]?.[0]).toBeInstanceOf(Blob);
     expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'office.txt');
   });
-
-  it('falls back to PDF preview conversion when no extracted text exists yet', async () => {
-    mockFetchFilePreview.mockResolvedValue({
-      file_id: 'file-1',
-      status: 'ready',
-      text: 'converted text',
-      textFormat: 'text',
-    });
-    const file = makeFile({
-      filename: 'scan.pdf',
-      type: 'application/pdf',
-      text: '',
-      textFormat: null,
-    });
-
-    renderCell(file);
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_convert_pdf_txt scan.pdf' }));
-
-    await waitFor(() => expect(mockFetchFilePreview).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(mockTriggerDownload).toHaveBeenCalledWith('blob:txt', 'scan.txt'));
-    expect(mockCreateObjectURL).toHaveBeenCalledTimes(1);
-  });
 });

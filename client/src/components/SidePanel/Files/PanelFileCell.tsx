@@ -50,7 +50,7 @@ export default function PanelFileCell({ row }: { row: Row<TFile | undefined> }) 
     [file?.text, file?.textFormat],
   );
 
-  const showTxtAction = (hasPlainText || isPdf || isTextFile) && !isAlreadyTxt;
+  const showTxtAction = (hasPlainText || isTextFile) && !isAlreadyTxt;
   const txtActionLabel = isPdf ? localize('com_ui_convert_pdf_txt') : localize('com_ui_export_txt');
   const downloadFilename = useMemo(() => getDownloadFilename(file), [file]);
   const txtFilename = useMemo(() => toTxtFilename(file?.filename), [file?.filename]);
