@@ -2,20 +2,19 @@ import { useMemo, memo, type FC, useCallback, useEffect, useRef } from 'react';
 import throttle from 'lodash/throttle';
 import { useRecoilValue } from 'recoil';
 import { ChevronDown } from 'lucide-react';
-import { QueryKeys } from 'librechat-data-provider';
-import { useQueryClient } from '@tanstack/react-query';
-import { List, AutoSizer, CellMeasurer, CellMeasurerCache } from 'react-virtualized';
-import { Spinner, TooltipAnchor, NewChatIcon, useMediaQuery } from '@librechat/client';
+import { Spinner, useMediaQuery } from '@librechat/client';
+import { List, CellMeasurer, CellMeasurerCache } from 'react-virtualized';
 import type { TConversation } from 'librechat-data-provider';
+import type { ReactNode } from 'react';
 import {
   useLocalize,
   TranslationKeys,
   useFavorites,
   useShowMarketplace,
-  useNewConvo,
+  useElementSize,
 } from '~/hooks';
-import { groupConversationsByDate, clearMessagesCache, cn } from '~/utils';
 import FavoritesList from '~/components/Nav/Favorites/FavoritesList';
+import { groupConversationsByDate, cn } from '~/utils';
 import { useActiveJobs } from '~/data-provider';
 import Convo from './Convo';
 import store from '~/store';
@@ -41,6 +40,8 @@ interface ConversationsProps {
   isChatsExpanded: boolean;
   setIsChatsExpanded: (expanded: boolean) => void;
   showFavorites?: boolean;
+  /** Actions for the Chats header, alongside the Projects header's own. */
+  chatsHeaderTrailing?: ReactNode;
 }
 
 interface MeasuredRowProps {
@@ -52,13 +53,21 @@ interface MeasuredRowProps {
   children: React.ReactNode;
 }
 
-/** Reusable wrapper for virtualized row measurement */
+/** Reusable wrapper for virtualized row measurement.
+ *  The List renders role="grid" over a role="rowgroup" container, so each row carries the
+ *  row/gridcell roles those parents require of their children. */
 const MeasuredRow: FC<MeasuredRowProps> = memo(
   ({ cache, rowKey, parent, index, style, children }) => (
     <CellMeasurer cache={cache} columnIndex={0} key={rowKey} parent={parent} rowIndex={index}>
       {({ registerChild }) => (
-        <div ref={registerChild as React.LegacyRef<HTMLDivElement>} style={style} className="px-3">
-          {children}
+        <div
+          ref={registerChild as React.LegacyRef<HTMLDivElement>}
+          style={style}
+          className="px-3"
+          data-testid="convo-list-row"
+          role="row"
+        >
+          <div role="gridcell">{children}</div>
         </div>
       )}
     </CellMeasurer>
@@ -83,29 +92,19 @@ LoadingSpinner.displayName = 'LoadingSpinner';
 interface ChatsHeaderProps {
   isExpanded: boolean;
   onToggle: () => void;
+  /** Section-scoped actions, mirroring the Projects header. */
+  trailing?: ReactNode;
 }
 
-const headerIconButtonClassName =
-  'flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-secondary outline-none transition-colors hover:bg-surface-active-alt hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-black dark:focus-visible:ring-white';
-
 /** Collapsible header for the Chats section */
-const ChatsHeader: FC<ChatsHeaderProps> = memo(({ isExpanded, onToggle }) => {
+const ChatsHeader: FC<ChatsHeaderProps> = memo(({ isExpanded, onToggle, trailing }) => {
   const localize = useLocalize();
-  const queryClient = useQueryClient();
-  const { newConversation } = useNewConvo();
-  const conversation = useRecoilValue(store.conversationByIndex(0));
-
-  const handleNewChat = useCallback(() => {
-    clearMessagesCache(queryClient, conversation?.conversationId);
-    queryClient.invalidateQueries([QueryKeys.messages]);
-    newConversation();
-  }, [conversation?.conversationId, newConversation, queryClient]);
 
   return (
-    <div className="flex h-8 w-full items-center gap-0.5 pr-2">
+    <div className="flex h-8 w-full items-center pr-2">
       <button
         onClick={onToggle}
-        className="group flex min-w-0 flex-1 items-center gap-1 rounded-lg px-1 py-2 text-xs font-bold text-text-secondary outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-black dark:focus-visible:ring-white"
+        className="group flex min-w-0 flex-1 items-center gap-1 rounded-lg px-1 py-2 text-xs font-bold text-text-secondary outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-text-primary"
         type="button"
         aria-expanded={isExpanded}
       >
@@ -118,19 +117,7 @@ const ChatsHeader: FC<ChatsHeaderProps> = memo(({ isExpanded, onToggle }) => {
           aria-hidden="true"
         />
       </button>
-      <TooltipAnchor
-        description={localize('com_ui_new_chat')}
-        render={
-          <button
-            type="button"
-            aria-label={localize('com_ui_new_chat')}
-            className={headerIconButtonClassName}
-            onClick={handleNewChat}
-          >
-            <NewChatIcon className="h-4 w-4" />
-          </button>
-        }
-      />
+      {trailing}
     </div>
   );
 });
@@ -171,6 +158,7 @@ const Conversations: FC<ConversationsProps> = ({
   isChatsExpanded,
   setIsChatsExpanded,
   showFavorites = true,
+  chatsHeaderTrailing,
 }) => {
   const localize = useLocalize();
   const search = useRecoilValue(store.search);
@@ -178,6 +166,11 @@ const Conversations: FC<ConversationsProps> = ({
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
   const convoHeight = isSmallScreen ? 44 : 34;
   const showAgentMarketplace = useShowMarketplace();
+  const {
+    ref: listContainerRef,
+    width: listWidth,
+    height: listHeight,
+  } = useElementSize<HTMLDivElement>();
 
   const favoritesContentKeyRef = useRef('');
 
@@ -205,6 +198,30 @@ const Conversations: FC<ConversationsProps> = ({
     () => groupConversationsByDate(filteredConversations),
     [filteredConversations],
   );
+
+  /* Pins are stripped from the date groups. An all-pin page leaves the
+     virtual list with no rows, so onRowsRendered never fires and later
+     unpinned chats stay unreachable. Ask for another page only when the
+     conversations input actually changes; a failed fetchNextPage leaves
+     the same array and must not loop. */
+  const paginatedFromRef = useRef<Array<TConversation | null> | null>(null);
+  useEffect(() => {
+    if (!isChatsExpanded || isLoading || isSearchLoading || groupedConversations.length > 0) {
+      return;
+    }
+    if (paginatedFromRef.current === rawConversations) {
+      return;
+    }
+    paginatedFromRef.current = rawConversations;
+    loadMoreConversations();
+  }, [
+    isChatsExpanded,
+    isLoading,
+    isSearchLoading,
+    groupedConversations.length,
+    rawConversations,
+    loadMoreConversations,
+  ]);
 
   const flattenedItems = useMemo(() => {
     const items: FlattenedItem[] = [];
@@ -245,7 +262,8 @@ const Conversations: FC<ConversationsProps> = ({
             return `favorites-${favoritesContentKeyRef.current}`;
           }
           if (item.type === 'header') {
-            return `header-${item.groupName}`;
+            const firstHeaderIndex = flattenedItemsRef.current[0]?.type === 'favorites' ? 1 : 0;
+            return `header-${item.groupName}-${index === firstHeaderIndex ? 'first' : 'sub'}`;
           }
           if (item.type === 'convo') {
             return `convo-${item.convo.conversationId}`;
@@ -285,6 +303,35 @@ const Conversations: FC<ConversationsProps> = ({
     return () => cancelAnimationFrame(frameId);
   }, [search.query, cache, containerRef]);
 
+  /** Grid only re-derives row offsets when the row count changes; reorders that
+   *  keep the count (e.g. a convo bumped across date groups) need an explicit recompute. */
+  useEffect(() => {
+    const frameId = requestAnimationFrame(() => {
+      if (containerRef.current && 'recomputeRowHeights' in containerRef.current) {
+        containerRef.current.recomputeRowHeights(0);
+      }
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [flattenedItems, containerRef]);
+
+  /** CellMeasurerCache(fixedWidth) keys heights by row, not width. Rows first measured
+   *  at a narrow width (e.g. mid expand-animation from a collapsed sidebar) would
+   *  otherwise persist their wrapped heights — re-measure when the width changes. */
+  const measuredWidthRef = useRef(0);
+  useEffect(() => {
+    if (listWidth === 0 || listWidth === measuredWidthRef.current) {
+      return;
+    }
+    measuredWidthRef.current = listWidth;
+    const frameId = requestAnimationFrame(() => {
+      cache.clearAll();
+      if (containerRef.current && 'recomputeRowHeights' in containerRef.current) {
+        containerRef.current.recomputeRowHeights(0);
+      }
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [listWidth, cache, containerRef]);
+
   const rowRenderer = useCallback(
     ({ index, key, parent, style }) => {
       const item = flattenedItems[index];
@@ -307,8 +354,7 @@ const Conversations: FC<ConversationsProps> = ({
       }
 
       if (item.type === 'header') {
-        // First date header index depends on whether the favorites row is included
-        const firstHeaderIndex = shouldShowFavorites ? 1 : 0;
+        const firstHeaderIndex = flattenedItems[0]?.type === 'favorites' ? 1 : 0;
         return (
           <MeasuredRow key={key} {...rowProps}>
             <DateLabel groupName={item.groupName} isFirst={index === firstHeaderIndex} />
@@ -332,7 +378,7 @@ const Conversations: FC<ConversationsProps> = ({
 
       return null;
     },
-    [cache, flattenedItems, moveToTop, toggleNav, isSmallScreen, shouldShowFavorites, activeJobIds],
+    [cache, flattenedItems, moveToTop, toggleNav, isSmallScreen, activeJobIds],
   );
 
   const getRowHeight = useCallback(
@@ -360,6 +406,7 @@ const Conversations: FC<ConversationsProps> = ({
         <ChatsHeader
           isExpanded={isChatsExpanded}
           onToggle={() => setIsChatsExpanded(!isChatsExpanded)}
+          trailing={chatsHeaderTrailing}
         />
       </div>
       {isSearchLoading ? (
@@ -368,28 +415,24 @@ const Conversations: FC<ConversationsProps> = ({
           <span className="ml-2 text-text-primary">{localize('com_ui_loading')}</span>
         </div>
       ) : (
-        <div className="flex-1">
-          <AutoSizer>
-            {({ width, height }) => (
-              <List
-                ref={containerRef}
-                width={width}
-                height={height}
-                deferredMeasurementCache={cache}
-                rowCount={flattenedItems.length}
-                rowHeight={getRowHeight}
-                rowRenderer={rowRenderer}
-                overscanRowCount={10}
-                aria-readonly={false}
-                className="outline-none"
-                aria-label="Conversations"
-                onRowsRendered={handleRowsRendered}
-                tabIndex={-1}
-                style={{ outline: 'none' }}
-                containerRole="rowgroup"
-              />
-            )}
-          </AutoSizer>
+        <div ref={listContainerRef} className="min-h-0 flex-1 overflow-hidden">
+          <List
+            ref={containerRef}
+            width={listWidth}
+            height={listHeight}
+            deferredMeasurementCache={cache}
+            rowCount={flattenedItems.length}
+            rowHeight={getRowHeight}
+            rowRenderer={rowRenderer}
+            overscanRowCount={10}
+            aria-readonly={false}
+            className="outline-none"
+            aria-label="Conversations"
+            onRowsRendered={handleRowsRendered}
+            tabIndex={-1}
+            style={{ outline: 'none' }}
+            containerRole="rowgroup"
+          />
         </div>
       )}
     </div>

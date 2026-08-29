@@ -20,9 +20,13 @@ import type { SearchResultData, UIResource, TPlugin } from 'librechat-data-provi
 import type { TokenMethods, IUser } from '@librechat/data-schemas';
 import type { LCTool } from '@librechat/agents';
 import type { OboTokenResolver, OboTrustChecker } from '~/mcp/oauth/obo';
+import type { GraphTokenResolver } from '~/utils/graph';
 import type { FlowStateManager } from '~/flow/manager';
 import type { RequestBody } from '~/types/http';
 import type * as o from '~/mcp/oauth/types';
+
+export type MCPRuntimeRequestBody = Required<Pick<RequestBody, 'messageId' | 'conversationId'>> &
+  Pick<RequestBody, 'parentMessageId'>;
 
 export type StdioOptions = z.infer<typeof StdioOptionsSchema>;
 export type WebSocketOptions = z.infer<typeof WebSocketOptionsSchema>;
@@ -48,6 +52,9 @@ export interface MCPResource {
 export interface LCFunctionTool {
   type: 'function';
   ['function']: LCTool;
+  /** Raw upstream tool name when the model-facing key stripped a redundant
+   *  server-name prefix — tool calls must send THIS name to the server. */
+  serverToolName?: string;
 }
 
 export type LCAvailableTools = Record<string, LCFunctionTool>;
@@ -60,6 +67,8 @@ export interface MCPPrompt {
 }
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+export type OAuthHandledSource = 'silent-refresh' | 'interactive';
 
 export type MCPTool = Tool;
 export type MCPToolListResponse = ListToolsResult;
@@ -150,8 +159,13 @@ export type FormattedToolResponse = FormattedContentResult;
  * - `'yaml'`   — operator-defined in librechat.yaml, full trust, boot-time init
  * - `'config'` — admin-defined via Config override, full trust, lazy init
  * - `'user'`   — user-provided via UI, sandboxed (restricted placeholder resolution)
+ * - `'plugin'` — contributed by an Agent Plugins package, no placeholder resolution
+ *
+ * This tag is load-bearing, not descriptive: `processMCPEnv` reads it to decide
+ * which placeholders may resolve. Code that stores a config must carry the tag
+ * through rather than re-deriving it from the storage tier.
  */
-export type MCPServerSource = 'yaml' | 'config' | 'user';
+export type MCPServerSource = 'yaml' | 'config' | 'user' | 'plugin';
 
 export type ParsedServerConfig = MCPOptions & {
   url?: string;
@@ -160,6 +174,13 @@ export type ParsedServerConfig = MCPOptions & {
   capabilities?: string;
   tools?: string;
   toolFunctions?: LCAvailableTools;
+  /**
+   * Instructions advertised by the server, fetched during inspection when
+   * `serverInstructions` is enabled. Held separately so `serverInstructions`
+   * always keeps the operator's declaration: overwriting it in place made a
+   * re-inspected config compare unequal to its own YAML entry.
+   */
+  resolvedInstructions?: string;
   initDuration?: number;
   updatedAt?: number;
   dbId?: string;
@@ -191,6 +212,10 @@ export interface BasicConnectionOptions {
   allowedAddresses?: string[] | null;
   /** When true, only resolve customUserVars in processMCPEnv (for DB-stored servers) */
   dbSourced?: boolean;
+  /** When true, serverConfig has already gone through processMCPEnv for this request */
+  skipEnvProcessing?: boolean;
+  /** When true, the connection is intentionally short-lived for a single request/tool call */
+  ephemeralConnection?: boolean;
 }
 
 /** User context for placeholder resolution in MCP connections (non-OAuth and OAuth alike) */
@@ -198,7 +223,15 @@ export interface UserConnectionContext {
   user?: IUser;
   customUserVars?: Record<string, string>;
   requestBody?: RequestBody;
+  requestScopedConnections?: RequestScopedMCPConnectionStore;
+  graphTokenResolver?: GraphTokenResolver;
   connectionTimeout?: number;
+}
+
+export interface RequestScopedMCPConnectionStore {
+  connections: Map<string, unknown>;
+  pending: Map<string, Promise<unknown>>;
+  disposeConnection?: (connectionKey: string, connection: unknown) => Promise<void>;
 }
 
 export interface OAuthStartOptions {
@@ -223,6 +256,7 @@ export interface OAuthConnectionOptions extends UserConnectionContext {
 export interface UserMCPConnectionOptions extends UserConnectionContext {
   serverName: string;
   forceNew?: boolean;
+  ephemeralConnection?: boolean;
   serverConfig?: ParsedServerConfig;
   flowManager?: FlowStateManager<o.MCPOAuthTokens | null>;
   tokenMethods?: TokenMethods;
@@ -243,6 +277,7 @@ export interface ToolDiscoveryOptions {
   oauthStart?: OAuthStartHandler;
   customUserVars?: Record<string, string>;
   requestBody?: RequestBody;
+  graphTokenResolver?: GraphTokenResolver;
   connectionTimeout?: number;
   /** Pre-resolved config-source servers for tenant-scoped lookup */
   configServers?: Record<string, ParsedServerConfig>;

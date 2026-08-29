@@ -43,6 +43,7 @@ const SUPERSEDED_INDEXES: Record<string, string[]> = {
     'unique_user_filename_bytes',
   ],
   groups: ['idOnTheSource_1_source_1'],
+  skillsyncstatuses: ['provider_1_sourceId_1'],
 };
 
 interface MigrationResult {

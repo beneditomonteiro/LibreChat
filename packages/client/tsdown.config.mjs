@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { defineConfig } from 'tsdown';
 
 // Mirror the prior Rollup `@rollup/plugin-replace` substitutions: only these three are
@@ -16,17 +17,20 @@ export default defineConfig({
   dts: { oxc: true },
   outDir: 'dist',
   sourcemap: true,
+  // Warn on module cycles at build time; CI enforces via config/circular-deps.mjs.
+  checks: { circularDependency: true },
   // Force .mjs/.cjs (and .d.mts/.d.cts) regardless of package `type`, so the package can stay
   // CommonJS (jest.config.js / babel.config.js are CJS) while still shipping dual ESM/CJS.
   fixedExtension: true,
   define,
+  copy: [{ from: 'src/icons/provider/assets', to: 'dist' }],
   // Extract all component CSS into a single `dist/style.css` (no import left in the JS, so the
   // CJS output stays valid CommonJS). Consumers import `@librechat/client/style.css` once.
   css: { inject: false },
   // Externalize every third-party import (consumers provide the peers + react/jsx-runtime);
   // bundle only relative, `~`-aliased, and absolute sources.
   deps: {
-    neverBundle: (id) => !id.startsWith('.') && !id.startsWith('~') && !id.startsWith('/'),
+    neverBundle: (id) => !id.startsWith('.') && !id.startsWith('~') && !path.isAbsolute(id),
     onlyBundle: false,
   },
 });

@@ -36,6 +36,13 @@ type ForkResponse = {
   messages: E2EMessage[];
 };
 
+type JsonResponse = {
+  ok: boolean;
+  status: number;
+  text: string;
+  json: unknown;
+};
+
 const uniqueLabel = (name: string) => `${name}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
 
 const replyPrompt = (label: string) => `E2E_REPLY:${label}`;
@@ -44,6 +51,9 @@ const countedPrompt = (label: string) => `E2E_COUNTED_REPLY:${label}`;
 const countedReplyText = (label: string, count: number) => `E2E counted reply ${label} #${count}`;
 const slowPrompt = (label: string) => `E2E_SLOW_REPLY:${label}`;
 const slowReplyPrefix = (label: string) => `E2E slow reply ${label}`;
+const slowCountedPrompt = (label: string) => `E2E_SLOW_COUNTED_REPLY:${label}`;
+const slowCountedReplyText = (label: string, count: number) =>
+  `E2E slow counted reply ${label} #${count}`;
 
 const messagesView = (page: Page) => page.getByTestId('messages-view');
 const messageRender = (page: Page, text: string) =>
@@ -265,7 +275,7 @@ async function mockActiveOAuthResumeStream({
     );
   }
 
-  await page.route(`**/api/agents/chat/status/${conversationId}`, (route) =>
+  await page.route(`**/api/agents/chat/status/${conversationId}**`, (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -522,6 +532,31 @@ async function fetchMessages(
   );
 }
 
+async function postJsonWithStatus(page: Page, path: string, token: string, body: unknown) {
+  return page.evaluate(
+    async ({ accessToken, requestBody, urlPath }): Promise<JsonResponse> => {
+      const response = await fetch(urlPath, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+      const text = await response.text();
+      let json: unknown = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = null;
+      }
+      return { ok: response.ok, status: response.status, text, json };
+    },
+    { accessToken: token, requestBody: body, urlPath: path },
+  );
+}
+
 async function waitForMessages(
   page: Page,
   conversationId: string,
@@ -551,7 +586,7 @@ async function clickMessageTitleButton(page: Page, messageTextValue: string, tit
   const render = messageRender(page, messageTextValue);
   await render.scrollIntoViewIfNeeded();
   await render.hover();
-  await render.locator(`button[title="${title}"]`).last().click();
+  await render.getByRole('button', { name: title, exact: true }).last().click();
 }
 
 async function clickSibling(page: Page, messageTextValue: string, direction: 'Previous' | 'Next') {
@@ -740,6 +775,104 @@ test.describe('message tree stream operations', () => {
     expect(messages.some((message) => messageText(message).includes(followReply))).toBe(false);
   });
 
+  test('shows the regenerating response immediately when regenerating a non-latest sibling', async ({
+    page,
+  }) => {
+    // A parent with multiple siblings, switched to an older one, then
+    // regenerated: the optimistic slice drops the target but keeps the other
+    // siblings, so the child count is unchanged and MultiMessage's
+    // length-change reset never fires. Without an explicit focus the view stays
+    // on the kept (newer) sibling and the streaming response is hidden until the
+    // server restores the dropped sibling at finalize. A slow reply keeps the
+    // stream open long enough to assert the during-stream state.
+    const label = uniqueLabel('regen-nonlatest');
+    const prompt = slowCountedPrompt(label);
+    const reply1 = slowCountedReplyText(label, 1);
+    const reply2 = slowCountedReplyText(label, 2);
+    const reply3 = slowCountedReplyText(label, 3);
+    const stopButton = page.getByRole('button', { name: 'Stop generating' });
+
+    await openMockChat(page);
+    await sendMessage(page, prompt);
+    await expect(messagesView(page).getByText(reply1)).toBeVisible({ timeout: 30000 });
+    await expect(stopButton).toBeHidden({ timeout: 30000 });
+
+    // First regenerate adds a sibling; the parent now has two responses.
+    await waitForGenerationStart(page, () => clickMessageTitleButton(page, reply1, 'Regenerate'));
+    await expect(messagesView(page).getByText(reply2)).toBeVisible({ timeout: 30000 });
+    await expect(stopButton).toBeHidden({ timeout: 30000 });
+
+    // View the older sibling, then regenerate it (the non-latest one).
+    await clickSibling(page, reply2, 'Previous');
+    await expect(messagesView(page).getByText(reply1)).toBeVisible();
+    await expect(messagesView(page).getByText(reply2)).toBeHidden();
+
+    await waitForGenerationStart(page, () => clickMessageTitleButton(page, reply1, 'Regenerate'));
+    // Still streaming (slow reply): the regenerating response must be visible
+    // now — not the kept sibling — and well before finalize.
+    await expect(stopButton).toBeVisible({ timeout: 30000 });
+    await expect(messagesView(page).getByText(reply3)).toBeVisible({ timeout: 4000 });
+    await expect(messagesView(page).getByText(reply2)).toBeHidden();
+
+    // It stays put after finalize too.
+    await expect(stopButton).toBeHidden({ timeout: 30000 });
+    await expect(messagesView(page).getByText(reply3)).toBeVisible();
+  });
+
+  test('does not flash the kept sibling before the created event when regenerating a non-latest sibling', async ({
+    page,
+  }) => {
+    // Same hazard at the optimistic (pre-`created`) render: useChatFunctions
+    // appends the placeholder and renders it before the request resolves. Gate
+    // the regenerate request so only that optimistic frame is on screen — with
+    // no `created` event to fall back on — and assert the kept sibling is
+    // already gone (the regenerating placeholder took its place). This isolates
+    // the optimistic focus; the createdHandler focus cannot mask a regression
+    // because `created` never arrives during the assertion.
+    const label = uniqueLabel('regen-precreated');
+    const prompt = countedPrompt(label);
+    const reply1 = countedReplyText(label, 1);
+    const reply2 = countedReplyText(label, 2);
+    const reply3 = countedReplyText(label, 3);
+
+    await openMockChat(page);
+    await sendAndExpectReply(page, prompt, reply1);
+
+    await waitForGenerationStart(page, () => clickMessageTitleButton(page, reply1, 'Regenerate'));
+    await expect(messagesView(page).getByText(reply2)).toBeVisible({ timeout: 30000 });
+
+    await clickSibling(page, reply2, 'Previous');
+    await expect(messagesView(page).getByText(reply1)).toBeVisible();
+    await expect(messagesView(page).getByText(reply2)).toBeHidden();
+
+    // Hold the SSE stream so the `created` event cannot arrive: the optimistic
+    // render is all there is. The chat POST returns a stream id; the stream
+    // itself is a separate GET (/api/agents/chat/stream/<id>) — gate that one,
+    // not the POST, which must complete to hand back the id.
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(/\/api\/agents\/chat\/stream\//, async (route: Route) => {
+      await gate;
+      return route.continue();
+    });
+
+    try {
+      await clickMessageTitleButton(page, reply1, 'Regenerate');
+      // The stream is gated, so the regenerating response has no text yet.
+      await expect(messagesView(page).getByText(reply3)).toBeHidden();
+      // Pre-`created` window: the kept sibling must not be the one on screen —
+      // the regenerating placeholder has already taken its place.
+      await expect(messagesView(page).getByText(reply2)).toBeHidden({ timeout: 5000 });
+      await expect(messagesView(page).getByText(reply1)).toBeHidden();
+    } finally {
+      release();
+    }
+
+    await expect(messagesView(page).getByText(reply3)).toBeVisible({ timeout: 30000 });
+  });
+
   test('resumes pending OAuth on the selected older branch after reload', async ({ page }) => {
     const label = uniqueLabel('oauth-branch');
     const rootPrompt = countedPrompt(`${label}-root`);
@@ -898,7 +1031,7 @@ test.describe('message tree stream operations', () => {
     await expect(editor).toBeVisible();
     await editor.fill(editedMiddlePrompt);
     await waitForGenerationStart(page, () =>
-      page.getByRole('button', { name: 'Save & Submit' }).click(),
+      page.getByRole('button', { name: 'Update & rerun' }).click(),
     );
     await expect(messagesView(page).getByText(editedMiddleReply)).toBeVisible({ timeout: 30000 });
 
@@ -956,6 +1089,45 @@ test.describe('message tree stream operations', () => {
     await expectVisibleMessages(page, [editedMiddlePrompt, editedMiddleReply, afterEditReply]);
   });
 
+  /** Regression: the editor's submit button was disabled until the draft differed, so
+   *  reissuing a cancelled request or one that failed on a since-restarted backend meant
+   *  typing a throwaway character first. An untouched draft reruns as-is. */
+  test('reruns an untouched user request from the editor', async ({ page }) => {
+    const label = uniqueLabel('rerun-untouched');
+    const prompt = countedPrompt(label);
+    const firstReply = countedReplyText(label, 1);
+    const secondReply = countedReplyText(label, 2);
+
+    await openMockChat(page);
+    await sendAndExpectReply(page, prompt, firstReply);
+    const conversationId = await conversationIdFromPage(page);
+
+    await clickMessageTitleButton(page, prompt, 'Edit');
+    const editor = page.getByTestId('message-text-editor');
+    await expect(editor).toBeVisible();
+    await expect(editor).toHaveValue(prompt);
+
+    const rerun = page.getByRole('button', { name: 'Rerun', exact: true });
+    await expect(rerun).toBeEnabled();
+    /** Nothing to save, so that button stays out of reach; the rerun does not. */
+    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    await waitForGenerationStart(page, () => rerun.click());
+
+    await expect(messagesView(page).getByText(secondReply)).toBeVisible({ timeout: 30000 });
+
+    const messages = await waitForMessages(
+      page,
+      conversationId,
+      (items) => items.some((message) => messageText(message).includes(secondReply)),
+      'rerun of an untouched request',
+    );
+    /** Reissued verbatim: a second user turn carrying exactly the original text. */
+    const reissued = messages.filter(
+      (message) => message.isCreatedByUser === true && messageText(message) === prompt,
+    );
+    expect(reissued).toHaveLength(2);
+  });
+
   test('error responses remain valid parents for follow-ups', async ({ page }) => {
     const label = uniqueLabel('error');
     const basePrompt = replyPrompt(`${label}-base`);
@@ -991,6 +1163,60 @@ test.describe('message tree stream operations', () => {
       errorText,
       afterErrorReply,
     ]);
+  });
+
+  test('rejects normal follow-ups whose parent is a preliminary assistant placeholder', async ({
+    page,
+  }) => {
+    const label = uniqueLabel('placeholder-parent');
+    const basePrompt = replyPrompt(`${label}-base`);
+    const baseReply = replyText(`${label}-base`);
+    const followPrompt = replyPrompt(`${label}-follow`);
+
+    await openMockChat(page);
+    await sendAndExpectReply(page, basePrompt, baseReply);
+    const conversationId = await conversationIdFromPage(page);
+    const token = await getAccessToken(page);
+
+    const beforeMessages = await fetchMessages(page, conversationId, token);
+    const stableParent = findMessage(beforeMessages, baseReply, false);
+    const response = await postJsonWithStatus(
+      page,
+      `/api/agents/chat/${encodeURIComponent(MOCK_ENDPOINTS[0].label)}`,
+      token,
+      {
+        text: followPrompt,
+        sender: 'User',
+        clientTimestamp: new Date().toLocaleString('sv').replace(' ', 'T'),
+        isCreatedByUser: true,
+        parentMessageId: `${stableParent.messageId}_`,
+        conversationId,
+        messageId: `${label}-user-message`,
+        endpoint: MOCK_ENDPOINTS[0].label,
+        endpointType: 'custom',
+        model: MOCK_ENDPOINTS[0].model,
+        spec: 'e2e-mock-provider-a',
+        isTemporary: false,
+        isRegenerate: false,
+        error: false,
+      },
+    );
+
+    expect(response.status).toBe(409);
+    expect(response.json).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining('selected parent response is still being saved'),
+      }),
+    );
+
+    const afterMessages = await fetchMessages(page, conversationId, token);
+    expect(afterMessages.map((message) => message.messageId).sort()).toEqual(
+      beforeMessages.map((message) => message.messageId).sort(),
+    );
+    expect(afterMessages.some((message) => messageText(message).includes(followPrompt))).toBe(
+      false,
+    );
+    expectNoFoldedMessages(afterMessages);
   });
 
   test('generation-start failures recover without folding the next follow-up', async ({ page }) => {
