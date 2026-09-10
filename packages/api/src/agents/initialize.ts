@@ -315,6 +315,7 @@ function resolveAgentProvider({
   }
 
   return rawProvider;
+}
 
 
 /**

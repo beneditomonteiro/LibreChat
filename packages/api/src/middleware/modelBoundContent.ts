@@ -209,7 +209,9 @@ function markProviderProjectionWorkOverflow(budget: ProviderProjectionWorkBudget
  * fatal class understood by that SDK keeps every execution path fail-closed.
  * Remove this bridge once the SDK exposes a generic fatal callback error.
  */
-class FatalModelBoundPolicyError extends StreamLimitExceededError {
+const SafeStreamLimitExceededError = StreamLimitExceededError || class extends Error {};
+
+class FatalModelBoundPolicyError extends SafeStreamLimitExceededError {
   public readonly code: ModelBoundPolicyError['code'];
   public readonly statusCode: ModelBoundPolicyError['statusCode'];
   public readonly body: ModelBoundPolicyError['body'];

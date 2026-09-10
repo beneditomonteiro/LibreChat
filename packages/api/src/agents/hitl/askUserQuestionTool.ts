@@ -16,6 +16,8 @@ import { recordToolInputValidationError } from '../toolValidation';
  * content-part type the merged question card renders — the whole pipeline keys on
  * this one string.
  */
+const SafeAskUserQuestionIdPattern = ASK_USER_QUESTION_ID_PATTERN || /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
 export const ASK_USER_QUESTION_TOOL_NAME = 'ask_user_question';
 
 /**
@@ -73,7 +75,7 @@ const askUserQuestionItemSchema: z.ZodObject<
 > = z.object({
   id: z
     .string()
-    .regex(ASK_USER_QUESTION_ID_PATTERN)
+    .regex(SafeAskUserQuestionIdPattern)
     .describe('Unique answer key for this question.'),
   header: z
     .string()
@@ -218,7 +220,7 @@ export const AskUserQuestionToolDefinition: AskUserQuestionToolDefinitionShape =
           properties: {
             id: {
               type: 'string',
-              pattern: ASK_USER_QUESTION_ID_PATTERN.source,
+              pattern: SafeAskUserQuestionIdPattern.source,
               description: 'Unique answer key for this question.',
             },
             header: {
