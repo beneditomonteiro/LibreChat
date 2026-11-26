@@ -213,15 +213,39 @@ export async function loadAgent(
   if (!agent_id) {
     return null;
   }
-  if (isEphemeralAgentId(agent_id)) {
-    return loadEphemeralAgent({ req, spec, endpoint, model_parameters }, deps);
-  }
-  const agent = await deps.getAgent({ id: agent_id });
 
+  /**
+   * A persisted agent takes priority even when its id also matches the ephemeral-id shape;
+   * only an id with no matching database record falls back to the synthetic ephemeral agent.
+   */
+  const agent = await deps.getAgent({ id: agent_id });
   if (!agent) {
+    if (isEphemeralAgentId(agent_id)) {
+      return loadEphemeralAgent({ req, spec, endpoint, model_parameters }, deps);
+    }
     return null;
   }
 
   agent.version ??= agent.versions?.length ?? 0;
+
+  /**
+   * A stored agent's own `model` is the source of truth for which model it runs; carry it into
+   * `model_parameters.model` when that is not already set, so provider resolution (see
+   * resolveAgentProvider in initialize.ts) has a model to resolve the real provider from.
+   */
+  const storedModel = (agent as Agent & { model?: string }).model;
+  if (typeof storedModel === 'string' && storedModel.length > 0) {
+    const existingParameters = (agent.model_parameters ?? {}) as AgentModelParameters & {
+      model?: string;
+    };
+    agent.model_parameters = {
+      ...existingParameters,
+      model:
+        typeof existingParameters.model === 'string' && existingParameters.model.length > 0
+          ? existingParameters.model
+          : storedModel,
+    } as AgentModelParameters;
+  }
+
   return agent;
 }

@@ -10,6 +10,7 @@ import {
   resolveModelCatalogKey,
   ViolationTypes,
   ErrorTypes,
+  EModelEndpoint,
   MAX_SUBAGENT_GRAPH_NODES,
   MAX_GRAPH_SUBAGENT_MEMBERS,
   sdkRuntimeBindingSchema,
@@ -575,7 +576,20 @@ export async function validateAgentModel(
   params: ValidateAgentModelParams,
 ): Promise<ValidateAgentModelResult> {
   const { req, res, agent, getEndpointModels, logViolation } = params;
-  const { model, provider: endpoint } = agent;
+  const { provider: endpoint } = agent;
+  /**
+   * A resolved `agents`-endpoint agent (see resolveAgentProvider in initialize.ts) carries its
+   * real model in model_parameters.model when agent.model itself was never set directly.
+   */
+  let model: string | undefined;
+  if (typeof agent.model === 'string' && agent.model.length > 0) {
+    model = agent.model;
+  } else if (
+    typeof agent.model_parameters?.model === 'string' &&
+    agent.model_parameters.model.length > 0
+  ) {
+    model = agent.model_parameters.model;
+  }
 
   if (!model) {
     return {
@@ -598,6 +612,14 @@ export async function validateAgentModel(
 
   const availableModels = modelsConfig[resolveModelCatalogKey(endpoint, modelsConfig)];
   if (!availableModels) {
+    /**
+     * An `agents`-endpoint agent (as opposed to a plain endpoint agent) has no model catalog
+     * of its own to check against -- its real provider's catalog was already the one checked
+     * above via resolveModelCatalogKey, so an empty result here is expected, not an error.
+     */
+    if (endpoint === EModelEndpoint.agents) {
+      return { isValid: true };
+    }
     return {
       isValid: false,
       error: {

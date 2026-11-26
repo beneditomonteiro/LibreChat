@@ -17,6 +17,7 @@ export * from './format';
 export * from './mime';
 export * from './mistral/crud';
 export * from './ocr';
+export * from './paddleocr/crud';
 export * from './parse';
 export * from './preflight';
 export * from './provision';

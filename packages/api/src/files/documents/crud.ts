@@ -7,6 +7,16 @@ import type { MistralOCRUploadResult, ServerRequest } from '~/types';
 import { spreadsheetToText } from './spreadsheet';
 import { assertSafeZipSize } from './zipSafety';
 
+/**
+ * axios/form-data/logger/~ crypto/axios-log helpers for ragExtract (doc/ppt fallback) are
+ * imported dynamically inside that function, not at module top level. This file is also
+ * loaded by pdf.spec.ts's forked `ts-node/register/transpile-only` subprocess (no path-alias
+ * resolution there), which previously only needed this file's `import type` lines (erased at
+ * transpile time) -- a real top-level `~/...` or dependency import here would break that
+ * subprocess even though it never calls ragExtract. Same precedent as pdfToText's own inline
+ * `await import('pdfjs-dist/...')` a few lines below.
+ */
+
 type FileParseFn = (file: Express.Multer.File) => Promise<string>;
 
 const DOCUMENT_PARSER_MAX_FILE_SIZE = 15 * megabyte;
@@ -23,9 +33,9 @@ export async function parseDocument({
   req,
 }: {
   file: Express.Multer.File;
-  req?: Pick<ServerRequest, 'config'>;
+  req?: Pick<ServerRequest, 'config' | 'user'>;
 }): Promise<MistralOCRUploadResult> {
-  const parseFn = getParserForMimeType(file.mimetype, req?.config?.spreadsheetParsing);
+  const parseFn = getParserForMimeType(file.mimetype, req?.config?.spreadsheetParsing, req);
   if (!parseFn) {
     throw new Error(`Unsupported file type in document parser: ${file.mimetype}`);
   }
@@ -58,6 +68,7 @@ export async function parseDocument({
 function getParserForMimeType(
   mimetype: string,
   configured?: Partial<SpreadsheetParsing>,
+  req?: Pick<ServerRequest, 'config' | 'user'>,
 ): FileParseFn | undefined {
   if (mimetype === 'application/pdf') {
     return pdfToText;
@@ -73,6 +84,21 @@ function getParserForMimeType(
   }
   if (mimetype === 'application/vnd.oasis.opendocument.text') {
     return odtToText;
+  }
+  /**
+   * Legacy pre-OOXML Word/PowerPoint. No local parser library is already a dependency for
+   * these binary formats; fall back to the self-hosted RAG API extraction service when one
+   * is configured (see ragExtract below). Requires req so the RAG API call can be attributed
+   * to the uploading user; unsupported when req is absent (e.g. a context with no user yet).
+   */
+  if (mimetype === 'application/msword' || mimetype === 'application/vnd.ms-word') {
+    return req ? (file) => docToText(file, req) : undefined;
+  }
+  if (
+    mimetype === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    mimetype === 'application/vnd.ms-powerpoint'
+  ) {
+    return req ? (file) => pptToText(file, req) : undefined;
   }
   return undefined;
 }
@@ -224,4 +250,92 @@ function extractOdtContentXml(filePath: string): Promise<string> {
       zipfile.on('error', (zipErr: Error) => finish(zipErr));
     });
   });
+}
+
+/**
+ * Generic self-hosted RAG API extraction fallback for binary document formats no local
+ * library already handles (legacy .doc/.ppt). Returns an empty string, rather than throwing,
+ * when the service or the uploading user's identity is unavailable, so the caller's own
+ * "No text found in document" check reports the real, user-facing cause.
+ */
+async function ragExtract({
+  req,
+  file,
+  label,
+}: {
+  req: Pick<ServerRequest, 'config' | 'user'>;
+  file: Express.Multer.File;
+  label: string;
+}): Promise<string> {
+  // Deferred: see the top-of-file note on why these aren't module-level imports.
+  const [
+    { logger },
+    { default: axios },
+    { default: FormData },
+    { generateShortLivedToken },
+    { logAxiosError },
+  ] = await Promise.all([
+    import('@librechat/data-schemas'),
+    import('axios'),
+    import('form-data'),
+    import('~/crypto/jwt'),
+    import('~/utils/axios'),
+  ]);
+
+  const userId = req.user?.id;
+  if (!userId) {
+    logger.warn(`[ragExtract] No user ID provided for ${label} parsing; skipping`);
+    return '';
+  }
+  const ragApiUrl = process.env.RAG_API_URL;
+  if (!ragApiUrl) {
+    logger.warn(`[ragExtract] RAG_API_URL not defined; ${label} parsing unavailable`);
+    return '';
+  }
+
+  try {
+    const jwtToken = generateShortLivedToken(userId);
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(file.path), { filename: file.originalname });
+    formData.append('strategy', 'builtin');
+
+    const formHeaders = formData.getHeaders();
+
+    const response = await axios.post(`${ragApiUrl}/extract`, formData, {
+      headers: {
+        Authorization: `Bearer ${jwtToken}`,
+        accept: 'application/json',
+        ...formHeaders,
+      },
+      timeout: 600000,
+    });
+
+    if (!response.data || typeof response.data.text !== 'string') {
+      throw new Error(`RAG API did not return valid extracted text for ${label}`);
+    }
+
+    return response.data.text;
+  } catch (error) {
+    logAxiosError({
+      message: `[${label}ToText] RAG API extraction failed:`,
+      error,
+    });
+    throw error;
+  }
+}
+
+/** Parses legacy (pre-OOXML) Word document (.doc) via the self-hosted RAG API. */
+async function docToText(
+  file: Express.Multer.File,
+  req: Pick<ServerRequest, 'config' | 'user'>,
+): Promise<string> {
+  return ragExtract({ req, file, label: 'doc' });
+}
+
+/** Parses legacy (pre-OOXML) PowerPoint document (.ppt) via the self-hosted RAG API. */
+async function pptToText(
+  file: Express.Multer.File,
+  req: Pick<ServerRequest, 'config' | 'user'>,
+): Promise<string> {
+  return ragExtract({ req, file, label: 'ppt' });
 }

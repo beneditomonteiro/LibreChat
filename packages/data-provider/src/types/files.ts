@@ -17,6 +17,7 @@ export enum FileSources {
   vertexai_mistral_ocr = 'vertexai_mistral_ocr',
   text = 'text',
   document_parser = 'document_parser',
+  paddleocr = 'paddleocr',
 }
 
 export const checkOpenAIStorage = (source: string) =>

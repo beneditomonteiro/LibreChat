@@ -428,6 +428,147 @@ async function resolveRuntimeProjectFiles({
 }
 
 /**
+ * Collect every model name a (possibly custom) endpoint config declares, so an agent
+ * stored with `provider: 'agents'` can be resolved to the real provider it actually
+ * runs on (see resolveAgentProvider below).
+ */
+function extractConfiguredModelNames(endpointConfig: unknown): string[] {
+  if (!endpointConfig || typeof endpointConfig !== 'object') {
+    return [];
+  }
+
+  const models = new Set<string>();
+  const addModel = (value: unknown): void => {
+    if (typeof value === 'string' && value.length > 0) {
+      models.add(value);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      const name = (value as { name?: unknown }).name;
+      if (typeof name === 'string' && name.length > 0) {
+        models.add(name);
+      }
+    }
+  };
+
+  const config = endpointConfig as {
+    modelNames?: unknown;
+    assistantModels?: unknown;
+    models?: unknown;
+  };
+
+  if (Array.isArray(config.modelNames)) {
+    config.modelNames.forEach(addModel);
+  }
+
+  if (Array.isArray(config.assistantModels)) {
+    config.assistantModels.forEach(addModel);
+  }
+
+  if (Array.isArray(config.models)) {
+    config.models.forEach(addModel);
+  } else if (config.models && typeof config.models === 'object') {
+    const defaultModels = (config.models as { default?: unknown }).default;
+    if (Array.isArray(defaultModels)) {
+      defaultModels.forEach(addModel);
+    }
+  }
+
+  return [...models];
+}
+
+/**
+ * An agent stored with `provider: 'agents'` is not a real provider name; resolve it to
+ * whichever configured endpoint actually serves the agent's model, so the allowedProviders
+ * check below validates against a real provider instead of the literal string 'agents'.
+ * Falls back to the raw provider when it cannot be resolved unambiguously.
+ */
+function resolveAgentProvider({
+  agent,
+  appConfig,
+  allowedProviders,
+}: {
+  agent: Pick<Agent, 'provider' | 'model' | 'model_parameters'>;
+  appConfig?: { endpoints?: Record<string, unknown> };
+  allowedProviders: Set<string>;
+}): string {
+  const rawProvider = agent.provider;
+  if (rawProvider !== EModelEndpoint.agents) {
+    return rawProvider;
+  }
+
+  let model: string | undefined;
+  if (
+    typeof agent.model_parameters?.model === 'string' &&
+    agent.model_parameters.model.length > 0
+  ) {
+    model = agent.model_parameters.model;
+  } else if (typeof agent.model === 'string' && agent.model.length > 0) {
+    model = agent.model;
+  }
+
+  const endpoints = appConfig?.endpoints;
+  if (!endpoints || !model) {
+    if (allowedProviders.size === 1) {
+      return [...allowedProviders][0];
+    }
+    return rawProvider;
+  }
+
+  const candidates = new Set<string>();
+  const maybeAddCandidate = (provider: string, endpointConfig: unknown): void => {
+    if (!provider || provider === EModelEndpoint.agents) {
+      return;
+    }
+    if (allowedProviders.size > 0 && !allowedProviders.has(provider)) {
+      return;
+    }
+    if (extractConfiguredModelNames(endpointConfig).includes(model)) {
+      candidates.add(provider);
+    }
+  };
+
+  for (const [endpointName, endpointConfig] of Object.entries(endpoints)) {
+    if (!endpointConfig || endpointName === EModelEndpoint.agents || endpointName === 'all') {
+      continue;
+    }
+
+    if (endpointName === EModelEndpoint.custom && Array.isArray(endpointConfig)) {
+      for (const customEndpoint of endpointConfig) {
+        const providerName =
+          customEndpoint &&
+          typeof customEndpoint === 'object' &&
+          typeof (customEndpoint as { name?: unknown }).name === 'string'
+            ? ((customEndpoint as { name: string }).name as string)
+            : undefined;
+        if (providerName) {
+          maybeAddCandidate(providerName, customEndpoint);
+        }
+      }
+      continue;
+    }
+
+    maybeAddCandidate(endpointName, endpointConfig);
+  }
+
+  if (candidates.size === 1) {
+    return [...candidates][0];
+  }
+
+  if (candidates.size > 1) {
+    throw new Error(
+      `Provider ${rawProvider} is ambiguous for model ${model}: ${[...candidates].join(', ')}`,
+    );
+  }
+
+  if (allowedProviders.size === 1) {
+    return [...allowedProviders][0];
+  }
+
+  return rawProvider;
+}
+
+/**
  * The request middleware already read this conversation once (`null` = looked up, absent).
  * A stored document without `files` genuinely has none; only the branded lineage-only
  * partial from a bound agent-event continuation cannot speak for the database.
@@ -1431,6 +1572,17 @@ export async function initializeAgent(
    * `allowedProviders` check (served names, `normalizeEndpointReferences`), provider setup,
    * user key lookups and token configs all read the served name.
    */
+  /**
+   * An agent stored under the literal 'agents' endpoint is not a real provider; resolve it
+   * to whichever configured endpoint serves its model BEFORE the allowedProviders check, or
+   * that check always fails for such an agent (the literal string 'agents' is never itself
+   * an allowed provider). See resolveAgentProvider's own doc comment for the resolution rule.
+   */
+  agent.provider = resolveAgentProvider({
+    agent,
+    appConfig: params.req?.config as { endpoints?: Record<string, unknown> } | undefined,
+    allowedProviders,
+  });
   const servedProvider = normalizeEndpointName(agent.provider);
   if (servedProvider !== agent.provider) {
     agent.provider = servedProvider;
